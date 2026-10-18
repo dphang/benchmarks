@@ -1,0 +1,191 @@
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..757f32e 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -1,9 +1,94 @@
+ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+-// Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
++const NO_OBSTACLE = -32768; // encoded value meaning "no obstacle in this cell"
++const SAMPLE_SPACING = 1; // metres between court sample points
+ 
++/**
++ * True when an obstacle along the ray from (x, y) toward (dx, dy) rises above
++ * the sun ray. `dx`/`dy` form a unit vector, `tanAlt` is tan(sun elevation),
++ * and `z` is the height of the sample point.
++ */
++function obstructed(scene, x, y, z, dx, dy, tanAlt) {
++  const { radius, cell, g, top } = scene;
++
++  // World -> continuous grid coordinates. u indexes columns (east), v rows
++  // (south), matching cellOf().
++  const u = (x + radius) / cell;
++  const v = (radius - y) / cell;
++
++  let i = Math.floor(u);
++  let j = Math.floor(v);
++  if (i < 0 || j < 0 || i >= g || j >= g) return false;
++
++  const stepI = dx > 0 ? 1 : dx < 0 ? -1 : 0;
++  const stepJ = dy > 0 ? -1 : dy < 0 ? 1 : 0; // v decreases as y grows north
++
++  // Distance along the ray at which the next cell boundary is crossed.
++  let sMaxU = stepI === 0
++    ? Infinity
++    : ((stepI > 0 ? i + 1 : i) - u) * cell / dx;
++  let sMaxV = stepJ === 0
++    ? Infinity
++    : ((stepJ > 0 ? j + 1 : j) - v) * cell / -dy;
++  const deltaU = stepI === 0 ? Infinity : cell / Math.abs(dx);
++  const deltaV = stepJ === 0 ? Infinity : cell / Math.abs(dy);
++
++  // Walk the grid cells the ray passes through, nearest first. `s` is the
++  // distance at which the ray entered the current cell; the ray's height over
++  // that cell is lowest there, so that is the height to compare against.
++  let s = 0;
++  while (i >= 0 && i < g && j >= 0 && j < g) {
++    const h = top[j * g + i];
++    if (h !== NO_OBSTACLE && h / 10 > z + s * tanAlt) return true;
++
++    if (sMaxU < sMaxV) {
++      s = sMaxU;
++      i += stepI;
++      sMaxU += deltaU;
++    } else {
++      s = sMaxV;
++      j += stepJ;
++      sMaxV += deltaV;
++    }
++  }
++
++  return false;
++}
++
++/**
++ * Share (0-1) of the courts' sample points in shadow at `date`, or null when
++ * the sun is at or below the horizon.
++ */
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (alt <= 0) return null;
++
++  const tanAlt = Math.tan(alt);
++  // Compass bearing -> world direction (world +y is north, +x is east).
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++
++  let shaded = 0;
++  let samples = 0;
++
++  for (const court of scene.courts) {
++    const nL = Math.max(1, Math.ceil(court.pl / SAMPLE_SPACING));
++    const nW = Math.max(1, Math.ceil(court.pw / SAMPLE_SPACING));
++
++    for (let a = 0; a < nL; a++) {
++      // Sample at cell centres, symmetric about the court centre.
++      const along = court.pl * ((a + 0.5) / nL - 0.5);
++      for (let b = 0; b < nW; b++) {
++        const across = court.pw * ((b + 0.5) / nW - 0.5);
++        const [x, y] = fromFrame(court, along, across);
++
++        if (cellOf(scene, x, y) === -1) continue;
++        samples++;
++        if (obstructed(scene, x, y, court.z, dx, dy, tanAlt)) shaded++;
++      }
++    }
++  }
++
++  return samples === 0 ? 0 : shaded / samples;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..921a3c9 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,82 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position using the standard SunCalc formulas.
+ 
++const rad = Math.PI / 180;
++const dayMs = 1000 * 60 * 60 * 24;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const e = rad * 23.4397; // obliquity of the Earth
++
++function toDays(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970 - J2000;
++}
++
++function rightAscension(l, b) {
++  return Math.atan2(
++    Math.sin(l) * Math.cos(e) - Math.tan(b) * Math.sin(e),
++    Math.cos(l),
++  );
++}
++
++function declination(l, b) {
++  return Math.asin(
++    Math.sin(b) * Math.cos(e) + Math.cos(b) * Math.sin(e) * Math.sin(l),
++  );
++}
++
++// SunCalc's azimuth: measured from south toward west.
++function azimuth(H, phi, dec) {
++  return Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi),
++  );
++}
++
++function altitude(H, phi, dec) {
++  return Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++}
++
++function siderealTime(d, lw) {
++  return rad * (280.16 + 360.9856235 * d) - lw;
++}
++
++function solarMeanAnomaly(d) {
++  return rad * (357.5291 + 0.98560028 * d);
++}
++
++function eclipticLongitude(M) {
++  const C = rad * (
++    1.9148 * Math.sin(M) +
++    0.02 * Math.sin(2 * M) +
++    0.0003 * Math.sin(3 * M)
++  );
++  const P = rad * 102.9372; // perihelion of the Earth
++  return M + C + P + Math.PI;
++}
++
++/**
++ * Position of the sun at `date` for a venue at (`lat`, `lng`).
++ * `alt` is elevation above the horizon in radians; `bearing` is the compass
++ * bearing toward the sun in radians, clockwise from north, in [0, 2pi).
++ */
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const lw = rad * -lng;
++  const phi = rad * lat;
++  const d = toDays(date);
++
++  const M = solarMeanAnomaly(d);
++  const L = eclipticLongitude(M);
++
++  const dec = declination(L, 0);
++  const ra = rightAscension(L, 0);
++  const H = siderealTime(d, lw) - ra;
++
++  const alt = altitude(H, phi, dec);
++
++  // Convert from "south toward west" to a compass bearing from north.
++  const bearing = ((azimuth(H, phi, dec) + Math.PI) % (2 * Math.PI) + 2 * Math.PI) %
++    (2 * Math.PI);
++
++  return { alt, bearing };
+ }

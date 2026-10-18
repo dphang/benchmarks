@@ -1,0 +1,286 @@
+diff --git a/.aider.chat.history.md b/.aider.chat.history.md
+new file mode 100644
+index 0000000..123aaa2
+--- /dev/null
++++ b/.aider.chat.history.md
+@@ -0,0 +1,123 @@
++
++# aider chat started at 2026-10-17 20:59:29
++
++> Detected dumb terminal, disabling fancy input and pretty output.  
++> ~/.local/bin/aider --model openai/bench-model --yes-always --no-auto-commits --no-check-update --analytics-disable --no-show-model-warnings --no-pretty --no-stream --no-gitignore --message Rally's court pages have a 3D view that traces how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser with three.js. We want the same numbers on the server to precompute a shade forecast.
++
++Port it to headless Node in this repo: implement `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). README.md has the scene format and the exact trace; reference/sun.ts and reference/viewer-shade.ts are the current browser implementations. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is. README.md package.json reference/sun.ts reference/viewer-shade.ts src/geometry.js src/shade.js src/sun.js venues/bellevue-crossroads-park.json venues/kenmore-inglemoor-hs.json venues/kirkland-peter-kirk-park.json  
++> Warning: it's best to only add files that need changes to the chat.  
++> https://aider.chat/docs/troubleshooting/edit-errors.html  
++> Aider v0.86.2  
++> Model: openai/bench-model with whole edit format  
++> Git repo: .git with 11 files  
++> Repo-map: using 1024 tokens, auto refresh  
++> Added README.md to the chat.  
++> Added package.json to the chat.  
++> Added reference/sun.ts to the chat.  
++> Added reference/viewer-shade.ts to the chat.  
++> Added src/geometry.js to the chat.  
++> Added src/shade.js to the chat.  
++> Added src/sun.js to the chat.  
++> Added venues/bellevue-crossroads-park.json to the chat.  
++> Added venues/kenmore-inglemoor-hs.json to the chat.  
++> Added venues/kirkland-peter-kirk-park.json to the chat.  
++
++#### Rally's court pages have a 3D view that traces how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser with three.js. We want the same numbers on the server to precompute a shade forecast.  
++####   
++#### Port it to headless Node in this repo: implement `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). README.md has the scene format and the exact trace; reference/sun.ts and reference/viewer-shade.ts are the current browser implementations. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.  
++> test/shade.test.js  
++> Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]: y  
++
++Looking at the request, I need to:
++
++1. **`src/sun.js`** — port `sunPosition` from `reference/sun.ts` (the SunCalc formulas).
++2. **`src/shade.js`** — port the trace from `reference/viewer-shade.ts`, using `sunPosition`, `fromFrame`, and `cellOf`. Compute `maxTop` (tallest obstacle, metres = max(topDm)/10), return `null` when `alt <= 0`, otherwise the shaded-sample share.
++
++The geometry helpers (`fromFrame`, `cellOf`) and the test file are already provided and shouldn't change. The trace details match the README exactly: sample loops (`a` from `-pl/2+0.6` to `pl/2`, `b` from `-pw/2+0.5` to `pw/2`, step 1.4 m), `ex = sin(bearing)`, `ny = cos(bearing)`, `rise = tan(alt)`, `h0 = court.z + 1`, `maxD = min(radius*1.5, (maxTop-h0)/rise)`, 0.5 m steps from `d = 0.5`, break on leaving the grid, shaded if `topDm[c]/10 > h0 + d*rise`.
++
++One subtlety: for the "flat venue" test, `maxTop` will be `-3276.8`, making `maxD` negative so the inner walk never runs and the result is `0`. For the "buried" test, `maxTop` is huge, `maxD` caps at `radius*1.5`, and the first step already finds a tall obstacle, so the result is `1`.
++
++src/sun.js
++````
++// Sun position (the SunCalc formulas), as the 3D view uses them.
++// Ported from reference/sun.ts.
++
++const rad = Math.PI / 180;
++
++export function sunPosition(date, lat, lng) {
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++  const e = rad * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
++}
++````
++
++src/shade.js
++````
++import { sunPosition } from './sun.js';
++import { fromFrame, cellOf } from './geometry.js';
++
++// Share of court samples shaded by trees/buildings at `date`, or null when the
++// sun is down. Ported from the trace in reference/viewer-shade.ts.
++
++export function shadeAt(scene, date) {
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const { radius: R, top: topDm, cell, g } = scene;
++
++  // Tallest obstacle in the venue, in metres (topDm is in decimetres).
++  let maxTopDm = -32768;
++  for (let i = 0; i < topDm.length; i++) if (topDm[i] > maxTopDm) maxTopDm = topDm[i];
++  const maxTop = maxTopDm / 10;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++
++  let shaded = 0;
++  let n = 0;
++
++  for (const f of scene.courts) {
++    const h0 = f.z + 1;
++    const maxD = Math.min(R * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
++      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
++        n++;
++        const [px0, py0] = fromFrame(f, a, b);
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
++          if (c < 0) break;
++          if (topDm[c] !== -32768 && topDm[c] / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return n ? shaded / n : 0;
++}
++````
++
++Notes:
++- I left `src/geometry.js` and `test/shade.test.js` untouched as requested.
++- `cell` and `g` are destructured for clarity but the actual lookups go through the given `cellOf(scene, x, y)`, which reads `scene.radius`/`scene.cell`/`scene.g` directly — so `1 m` vs `2 m` cell grids both work.
++- The `maxTop` scan avoids `Math.max(...topDm)` spread (12,100 elements are within limits today, but a loop is safer for larger scenes).
++
++> Tokens: 98k sent, 1.2k cache hit, 3.5k received.  
++> Applied edit to src/shade.js  
++> Applied edit to src/sun.js  
++> summarizer unexpectedly failed for all models  
+diff --git a/.aider.input.history b/.aider.input.history
+new file mode 100644
+index 0000000..c3a439d
+--- /dev/null
++++ b/.aider.input.history
+@@ -0,0 +1,5 @@
++
++# 2026-10-17 20:59:31.695171
+++Rally's court pages have a 3D view that traces how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser with three.js. We want the same numbers on the server to precompute a shade forecast.
+++
+++Port it to headless Node in this repo: implement `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). README.md has the scene format and the exact trace; reference/sun.ts and reference/viewer-shade.ts are the current browser implementations. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.
+diff --git a/.aider.tags.cache.v4/cache.db b/.aider.tags.cache.v4/cache.db
+new file mode 100644
+index 0000000000000000000000000000000000000000..2ae8c31543e7b642aff759cd84c34d67da85b226
+GIT binary patch
+literal 40960
+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
+AVgLXD
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/shade.js b/src/shade.js
+index 368044e..30d64ad 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -2,8 +2,45 @@ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+ // Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
++// sun is down. Ported from the trace in reference/viewer-shade.ts.
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const { radius: R, top: topDm, cell, g } = scene;
++
++  // Tallest obstacle in the venue, in metres (topDm is in decimetres).
++  let maxTopDm = -32768;
++  for (let i = 0; i < topDm.length; i++) if (topDm[i] > maxTopDm) maxTopDm = topDm[i];
++  const maxTop = maxTopDm / 10;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++
++  let shaded = 0;
++  let n = 0;
++
++  for (const f of scene.courts) {
++    const h0 = f.z + 1;
++    const maxD = Math.min(R * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
++      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
++        n++;
++        const [px0, py0] = fromFrame(f, a, b);
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
++          if (c < 0) break;
++          if (topDm[c] !== -32768 && topDm[c] / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return n ? shaded / n : 0;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index 4e9c04e..6012802 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,6 +1,21 @@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+-// Port reference/sun.ts. Not implemented yet.
++// Ported from reference/sun.ts.
++
++const rad = Math.PI / 180;
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++  const e = rad * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }

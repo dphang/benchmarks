@@ -1,0 +1,4114 @@
+
+
+I'll start by exploring the repository structure to understand the codebase and then examine the reference implementations and test cases.
+
+
+  ────────────────────────────────────────
+  ▸ tree
+    depth: 5
+    path: .
+
+-32600: Tool 'read' was not advertised for this model turn-32600: Tool 'read' was not advertised for this model turn-32600: Tool 'read' was not advertised for this model turn-32600: Tool 'read' was not advertised for this model turn-32600: Tool 'read' was not advertised for this model turnreference/  [87]
+  sun.ts  [57]
+  viewer-shade.ts  [30]
+src/  [34]
+  geometry.js  [19]
+  shade.js  [9]
+  sun.js  [6]
+test/  [41]
+  shade.test.js  [41]
+venues/  [3]
+  bellevue-crossroads-park.json  [1]
+  kenmore-inglemoor-hs.json  [1]
+  kirkland-peter-kirk-park.json  [1]
+README.md  [86]
+package.json  [9]
+    -32600: Tool 'read' was not advertised for this model turn
+    -32600: Tool 'read' was not advertised for this model turn
+    -32600: Tool 'read' was not advertised for this model turn
+    -32600: Tool 'read' was not advertised for this model turn
+    -32600: Tool 'read' was not advertised for this model turn
+
+
+Let me read the key files to understand the structure:
+
+-32600: Tool 'read_resource' was not advertised for this model turn-32600: Tool 'read_resource' was not advertised for this model turn-32600: Tool 'read_resource' was not advertised for this model turn-32600: Tool 'read_resource' was not advertised for this model turn-32600: Tool 'read_resource' was not advertised for this model turn-32600: Tool 'read_resource' was not advertised for this model turn    -32600: Tool 'read_resource' was not advertised for this model turn
+    -32600: Tool 'read_resource' was not advertised for this model turn
+    -32600: Tool 'read_resource' was not advertised for this model turn
+    -32600: Tool 'read_resource' was not advertised for this model turn
+    -32600: Tool 'read_resource' was not advertised for this model turn
+    -32600: Tool 'read_resource' was not advertised for this model turn
+
+
+Let me use shell to read the files:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat README.md
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat reference/sun.ts
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat reference/viewer-shade.ts
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat src/geometry.js
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat src/sun.js
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat src/shade.js
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat test/shade.test.js
+
+# rally-court3d — headless shade precompute
+
+Rally's court pages have a **3D view** (`/courts/<slug>/3d`) that draws each venue
+from LiDAR — ground, tree crowns, buildings, courts — lights it with the real
+sun, and traces how much of the courts the trees and buildings shade as the day
+goes on. Today that trace runs in the browser with three.js; we want the same
+numbers on the server so we can precompute a shade forecast per court.
+
+This package is the headless port. It is plain Node (ESM), no three.js, no
+network.
+
+## What to implement
+
+Two modules, both exported as named functions:
+
+### `src/sun.js` — `sunPosition(date, lat, lng) -> { alt, bearing }`
+
+The SunCalc formulas, exactly as the browser uses them (`reference/sun.ts` is the
+current implementation — port it). `alt` is elevation above the horizon in
+radians, `bearing` is the compass bearing toward the sun in radians, clockwise
+from north.
+
+### `src/shade.js` — `shadeAt(scene, date) -> number | null`
+
+How much of the courts a venue's trees and buildings shade at `date`:
+
+- Compute `s = sunPosition(date, scene.lat, scene.lng)`.
+- If the sun is at or below the horizon (`s.alt <= 0`) return `null`.
+- Otherwise return the **share of court sample points in shadow** (0–1).
+
+The trace, matching the browser (`reference/viewer-shade.ts`):
+
+```
+ex = sin(s.bearing);  ny = cos(s.bearing);  rise = tan(s.alt)
+```
+
+From each sample point, walk toward the sun in steps of **0.5 m** starting at
+`d = 0.5`, up to `maxD = min(scene.radius * 1.5, (maxTop - h0) / rise)` where
+`h0 = court.z + 1` and `maxTop` is the tallest obstacle in the venue (metres).
+At each step look up the obstacle grid at `(px + ex*d, py + ny*d)`. A point is
+**shaded** if that cell holds an obstacle taller than `h0 + d * rise`. Stop the
+walk early if the step leaves the grid.
+
+Sample points, per court: `a` from `-pl/2 + 0.6` to `pl/2` and `b` from
+`-pw/2 + 0.5` to `pw/2`, both in **1.4 m** steps, mapped to world coordinates by
+
+```
+fromFrame(court, a, b) = [ court.cx + cos(theta)*a - sin(theta)*b,
+                           court.cy + sin(theta)*a + cos(theta)*b ]
+```
+
+The result is the count of shaded samples over the total number of samples across
+every court.
+
+### `src/geometry.js` — `fromFrame` and `cellOf` (given)
+
+Cell lookup for the obstacle grid:
+
+```
+cellOf(scene, x, y):
+  i = floor((x + radius) / cell);  j = floor((radius - y) / cell)
+  out of range        -> -1
+  otherwise           -> j * g + i
+```
+
+## The venue scene
+
+`venues/*.json` are baked exactly like the browser's scenes, but the obstacle
+grid is stored plainly instead of base64:
+
+```
+{ name, lat, lng, radius,   // metres
+  cell,                     // metres per grid cell
+  g,                        // grid width in cells (grid is g x g)
+  courts: [ { sport, cx, cy, theta, pl, pw, AL, AW, z } ],
+  top: [ ... g*g ints ... ] // obstacle top height, decimetres; -32768 = none
+}
+```
+
+Obstacle heights are in **decimetres** (divide by 10 for metres), same as the
+browser's `topDm`. Note `cell` is not always 1 m, so `cellOf` is the general
+form of the browser's lookup.
+
+## Tests
+
+`test/shade.test.js` has a few cases. `node --test`.// Sun position (the SunCalc formulas) and local-time helpers for the 3D view.
+
+const rad = Math.PI / 180;
+
+export interface SunPos {
+  /** Elevation above the horizon, radians. */
+  alt: number;
+  /** Compass bearing toward the sun, radians clockwise from north. */
+  bearing: number;
+}
+
+export function sunPosition(date: Date, lat: number, lng: number): SunPos {
+  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
+  const M = rad * (357.5291 + 0.98560028 * d);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + rad * 102.9372 + Math.PI;
+  const e = rad * 23.4397;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
+  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
+  const phi = rad * lat;
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+}
+
+function tzOffset(t: number, tz: string): number {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(t)
+      .map((x) => [x.type, x.value]),
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - t;
+}
+
+/** The instant that is `minutes` after local midnight on `ymd` (YYYY-MM-DD) in `tz`. */
+export function zonedTime(ymd: string, minutes: number, tz: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d, 0, minutes);
+  return new Date(guess - tzOffset(guess - tzOffset(guess, tz), tz));
+}
+
+/** Today's date (YYYY-MM-DD) in `tz`. */
+export function localYmd(date: Date, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date);
+}  // ---------- shade tracing against the LiDAR obstacle grid ----------
+  const samples = data.courts.map((f) => {
+    const out: [number, number][] = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4)
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) out.push(fromFrame(f, a, b));
+    return out;
+  });
+  const traced = (s: SunPos): number => {
+    const ex = Math.sin(s.bearing);
+    const ny = Math.cos(s.bearing);
+    const rise = Math.tan(s.alt);
+    let shaded = 0;
+    let n = 0;
+    data.courts.forEach((f, ci) => {
+      const h0 = f.z + 1;
+      const maxD = Math.min(R * 1.5, (maxTop - h0) / rise);
+      for (const [px0, py0] of samples[ci]) {
+        n++;
+        for (let d = 0.5; d < maxD; d += 0.5) {
+          const c = cellOf(px0 + ex * d, py0 + ny * d);
+          if (c < 0) break;
+          if (topDm[c] !== -32768 && topDm[c] / 10 > h0 + d * rise) {
+            shaded++;
+            break;
+          }
+        }
+      }
+    });
+    return n ? shaded / n : 0;
+  };// Given helpers: court frame -> world, and obstacle-grid cell lookup.
+
+export const deg = Math.PI / 180;
+
+/** Court-local (a along the length, b across) -> world [x, y]. */
+export function fromFrame(f, a, b) {
+  return [
+    f.cx + Math.cos(f.theta) * a - Math.sin(f.theta) * b,
+    f.cy + Math.sin(f.theta) * a + Math.cos(f.theta) * b,
+  ];
+}
+
+/** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}// Sun position (the SunCalc formulas), as the 3D view uses them.
+// Port reference/sun.ts. Not implemented yet.
+
+export function sunPosition(date, lat, lng) {
+  throw new Error('sunPosition is not implemented');
+}import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// Share of court samples shaded by trees/buildings at `date`, or null when the
+// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
+
+export function shadeAt(scene, date) {
+  throw new Error('shadeAt is not implemented');
+}import test from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sunPosition } from '../src/sun.js';
+import { shadeAt } from '../src/shade.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test('sun is up at local midday and down at night (Seattle, June)', () => {
+  const noon = new Date('2026-06-21T20:00:00Z'); // ~13:00 PDT
+  const night = new Date('2026-06-21T08:00:00Z'); // ~01:00 PDT
+  const s = sunPosition(noon, 47.6, -122.3);
+  assert.ok(s.alt > 0.5, 'sun should be high at midday');
+  assert.ok(s.bearing >= 0 && s.bearing < 2 * Math.PI, 'bearing wraps to [0, 2pi)');
+  assert.ok(sunPosition(night, 47.6, -122.3).alt < 0, 'sun below horizon at night');
+});
+
+test('a flat venue with no obstacles is never shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(-32768),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 0);
+});
+
+test('a venue buried in tall obstacles is fully shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(32767),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 1);
+});
+
+test('the sun is down after dark: shadeAt is null', () => {
+  const scene = JSON.parse(readFileSync(join(here, '..', 'venues', 'kenmore-inglemoor-hs.json'), 'utf8'));
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T09:00:00Z')), null);
+});
+
+Let me also check the venues to understand the scene format:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat venues/kenmore-inglemoor-hs.json
+
+-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,5,7,65,105,160,161,159,185,211,210,209,223,214,192,168,165,126,-13,70,44,73,77,72,48,44,55,78,48,48,48,46,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,45,43,-32768,-32768,42,43,42,42,42,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,10,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,1,8,7,136,161,162,196,206,203,225,226,235,222,189,173,169,125,-42,4,60,103,96,76,50,17,6,47,46,47,46,46,32,-32768,32,-32768,-32768,-32768,-32768,-32768,33,31,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,45,-32768,-32768,40,-32768,29,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,17,-32768,-32768,-32768,-32768,-32768,-32768,10,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,4,9,132,162,166,198,217,234,239,251,240,206,172,159,156,121,111,112,86,105,101,76,59,26,16,62,30,32,32,30,28,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,34,30,29,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,14,16,-32768,-32768,10,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,11,-32768,-32768,-32768,-32768,8,-32768,-32768,-32768,-32768,-32768,-32768,-32768,68,107,105,177,196,210,231,243,250,245,221,163,162,134,142,132,128,84,100,98,93,29,69,78,89,29,30,31,-32768,-32768,-32768,41,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,29,27,-32768,-32768,-32768,39,40,40,40,40,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,15,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,120,-32768,-32768,11,10,11,-32768,-32768,16,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,95,93,178,206,208,226,232,244,240,195,146,120,128,123,124,128,91,50,91,21,-33,67,86,95,32,32,32,-32768,-32768,-32768,40,41,-32768,-32768,-32768,-32768,27,-32768,-32768,-32768,31,44,47,47,47,47,47,47,42,-32768,-32768,-32768,27,25,26,25,25,25,24,-32768,-32768,18,-32768,-32768,-32768,-32768,-32768,18,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,31,32,31,32,30,32,-32768,11,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,57,97,105,120,181,216,224,226,225,227,191,39,94,100,111,243,164,66,13,30,-67,-141,71,81,88,32,33,33,33,-32768,-32768,42,41,41,-32768,-32768,-32768,29,-32768,-32768,-32768,31,45,51,53,51,51,58,49,42,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,121,121,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,28,29,25,25,25,21,31,26,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,32,89,73,122,111,126,35,199,196,155,185,66,39,242,276,289,270,26,48,49,-37,-41,-24,-7,72,31,33,33,33,-32768,-32768,42,42,41,-32768,-32768,-32768,-32768,-32768,-32768,-32768,30,45,51,50,50,49,50,49,42,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,121,-32768,-32768,15,17,18,18,18,-32768,17,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,40,81,83,47,111,180,-32768,130,124,159,98,84,39,257,303,312,281,237,-36,31,-129,-38,-15,-13,43,31,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,29,43,45,43,44,43,44,42,42,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,17,17,-32768,-32768,-32768,-32768,-32768,-32768,19,19,-32768,16,16,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,88,103,172,186,191,186,154,175,153,237,123,-17,232,290,294,262,249,-103,-93,-120,-36,-18,2,43,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,33,32,32,32,30,30,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,19,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,17,-32768,-32768,-32768,-32768,-32768,-32768,19,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,105,162,190,194,200,179,185,245,302,272,172,165,266,242,205,-76,-96,-100,-87,-78,-49,11,41,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,30,30,-32768,-32768,-32768,-32768,26,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,27,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,46,46,45,-32768,23,22,16,-32768,-32768,-32768,-32768,-32768,28,28,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,16,-32768,14,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,85,161,175,196,191,171,135,279,304,275,216,108,93,-26,-70,-90,-99,-101,15,55,94,18,45,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,40,-32768,-32768,-32768,28,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,19,46,45,-32768,21,-32768,-32768,-32768,34,34,-32768,27,28,27,-32768,-32768,-32768,-32768,-32768,-32768,-32768,15,17,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,72,76,120,170,181,175,162,140,259,271,262,218,100,-49,-37,-38,-71,-78,-94,123,196,202,134,82,-32768,-32768,-32768,-32768,-32768,28,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,31,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,33,35,33,-32768,-32768,-32768,-32768,-32768,32,33,34,34,32,46,46,17,-32768,-32768,-32768,30,35,35,28,33,35,33,25,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,37,86,85,111,127,129,109,126,105,191,226,177,37,42,-48,-38,-45,-63,-74,68,141,224,230,154,89,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,30,31,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,32,35,-32768,-32768,-32768,-32768,-32768,-32768,32,33,35,34,32,46,46,-32768,-32768,30,28,30,34,35,35,29,35,33,26,-32768,-32768,-32768,-32768,-32768,-32768,-32768,19,21,-32768,-32768,-32768,-32768,-32768,-32768,-32768,74,76,92,83,83,18,109,25,129,160,165,159,154,-12,-17,-31,-44,-11,65,-19,-72,115,167,220,230,193,80,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,28,32,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,33,-32768,-32768,-32768,30,-32768,-32768,-32768,-32768,33,35,34,32,46,46,30,30,30,30,30,35,35,35,29,35,35,27,-32768,-32768,-32768,20,20,20,-32768,22,18,14,-32768,-32768,-32768,-32768,-32768,60,118,128,146,146,135,141,87,174,172,191,192,177,168,136,34,-29,-66,42,70,80,84,-2,143,202,193,192,57,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,41,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,33,34,27,29,-32768,-32768,-32768,38,-32768,-32768,-32768,16,33,34,34,32,46,45,45,30,29,37,37,35,35,35,30,35,35,26,-32768,-32768,20,18,20,19,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,96,138,151,156,141,167,153,83,180,183,193,196,190,189,172,85,-32768,-68,30,47,95,87,35,17,104,90,118,-118,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,29,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,-32768,35,36,25,26,-32768,-32768,-32768,-32768,29,-32768,-32768,23,-32768,32,34,34,32,45,44,45,30,29,30,30,-32768,-32768,-32768,18,19,-32768,-32768,-32768,-32768,14,20,-32768,-32768,-32768,-32768,26,25,26,-32768,-32768,-32768,125,114,135,155,163,155,177,172,163,179,182,196,206,203,192,174,90,-32768,-32768,2,65,128,115,35,6,7,-46,-47,-114]}[Output exceeded 50000 byte limit (71330 bytes total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/stdout-7. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+[Output exceeded 50000 byte limit (71330 bytes total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/output-7. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+
+Now I have all the information needed. Let me implement `src/sun.js` first:
+
+
+  ────────────────────────────────────────
+  ▸ write
+    path src/sun.js
+    content: // Sun position (the SunCalc formulas), as the 3D view uses them.
+
+const rad = Math.PI / 180;
+
+/**
+ * Compute sun position for a given date and location.
+ * @param {Date} date - The date to compute for
+ * @param {number} lat - Latitude in degrees
+ * @param {number} lng - Longitude in degrees
+ * @returns {{ alt: number, bearing: number }} - Elevation and bearing in radians
+ */
+export function sunPosition(date, lat, lng) {
+  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
+  const M = rad * (357.5291 + 0.98560028 * d);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + rad * 102.9372 + Math.PI;
+  const e = rad * 23.4397;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
+  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
+  const phi = rad * lat;
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+}
+
+
+Wrote src/sun.js (27 lines)
+
+Now let me implement `src/shade.js`:
+
+
+  ────────────────────────────────────────
+  ▸ write
+    path src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) break;
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shaded++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return n ? shaded / n : 0;
+}
+
+
+Wrote src/shade.js (62 lines)
+
+Now let me run the tests to verify the implementation:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node --test test/shade.test.js
+
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.182834
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 1.040541
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 4.886875
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://work/weak/goose/rally-3d-shade-0/test/shade.test.js:35:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.579916
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 58.011959
+
+Command exited with code 1
+
+One test is failing. Let me debug by checking what's happening with the tall obstacles test. The issue is that when all cells have height 32767 (3276.7m), the bearing computation might not point to any points, leading to no samples being checked. Let me examine the reference implementation more closely:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { shadeAt } from './src/shade.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+const result = shadeAt(scene, new Date('2026-06-21T20:00:00Z'));
+console.log('Result:', result);
+
+import { sunPosition } from './src/sun.js';
+const s = sunPosition(new Date('2026-06-21T20:00:00Z'), 47.6, -122.3);
+console.log('Sun:', s);
+"
+
+
+Result: 0
+Sun: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+
+The sun is up. Let me trace through the logic more carefully. The issue could be in how we're checking obstacle height. Let me look at the reference implementation again and trace through:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { fromFrame, cellOf } from './src/geometry.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const ex = Math.sin(3.0316692789970405);
+const ny = Math.cos(3.0316692789970405);
+const rise = Math.tan(1.1472973514160205);
+const h0 = 0 + 1;
+const maxTop = 3276.7;
+const maxD = Math.min(110 * 1.5, (maxTop - h0) / rise);
+
+console.log('ex, ny, rise:', ex, ny, rise);
+console.log('maxD:', maxD);
+
+// First sample point
+const [px0, py0] = fromFrame(scene.courts[0], -scene.courts[0].pl / 2 + 0.6, -scene.courts[0].pw / 2 + 0.5);
+console.log('First sample:', px0, py0);
+
+// Check a few cells
+for (let d = 0.5; d < maxD && d < 20; d += 0.5) {
+  const px = px0 + ex * d;
+  const py = py0 + ny * d;
+  const c = cellOf(scene, px, py);
+  const obstacleHeight = scene.top[c] / 10;
+  const threshold = h0 + d * rise;
+  console.log('d=', d.toFixed(1), 'px=', px.toFixed(2), 'py=', py.toFixed(2), 'c=', c, 'obs=', obstacleHeight, 'thresh=', threshold.toFixed(2), 'obs > thresh?', obstacleHeight > threshold);
+}
+"
+
+
+ex, ny, rise: 0.10970213822417842 -0.9939645068457139 2.218397226982552
+maxD: 165
+First sample: -11.285 -4.985
+d= 0.5 px= -11.23 py= -5.48 c= 6319 obs= 3276.7 thresh= 2.11 obs > thresh? true
+d= 1.0 px= -11.18 py= -5.98 c= 6319 obs= 3276.7 thresh= 3.22 obs > thresh? true
+d= 1.5 px= -11.12 py= -6.48 c= 6429 obs= 3276.7 thresh= 4.33 obs > thresh? true
+d= 2.0 px= -11.07 py= -6.97 c= 6429 obs= 3276.7 thresh= 5.44 obs > thresh? true
+d= 2.5 px= -11.01 py= -7.47 c= 6429 obs= 3276.7 thresh= 6.55 obs > thresh? true
+d= 3.0 px= -10.96 py= -7.97 c= 6429 obs= 3276.7 thresh= 7.66 obs > thresh? true
+d= 3.5 px= -10.90 py= -8.46 c= 6539 obs= 3276.7 thresh= 8.76 obs > thresh? true
+d= 4.0 px= -10.85 py= -8.96 c= 6539 obs= 3276.7 thresh= 9.87 obs > thresh? true
+d= 4.5 px= -10.79 py= -9.46 c= 6539 obs= 3276.7 thresh= 10.98 obs > thresh? true
+d= 5.0 px= -10.74 py= -9.95 c= 6539 obs= 3276.7 thresh= 12.09 obs > thresh? true
+d= 5.5 px= -10.68 py= -10.45 c= 6649 obs= 3276.7 thresh= 13.20 obs > thresh? true
+d= 6.0 px= -10.63 py= -10.95 c= 6649 obs= 3276.7 thresh= 14.31 obs > thresh? true
+d= 6.5 px= -10.57 py= -11.45 c= 6649 obs= 3276.7 thresh= 15.42 obs > thresh? true
+d= 7.0 px= -10.52 py= -11.94 c= 6649 obs= 3276.7 thresh= 16.53 obs > thresh? true
+d= 7.5 px= -10.46 py= -12.44 c= 6759 obs= 3276.7 thresh= 17.64 obs > thresh? true
+d= 8.0 px= -10.41 py= -12.94 c= 6759 obs= 3276.7 thresh= 18.75 obs > thresh? true
+d= 8.5 px= -10.35 py= -13.43 c= 6759 obs= 3276.7 thresh= 19.86 obs > thresh? true
+d= 9.0 px= -10.30 py= -13.93 c= 6759 obs= 3276.7 thresh= 20.97 obs > thresh? true
+d= 9.5 px= -10.24 py= -14.43 c= 6869 obs= 3276.7 thresh= 22.07 obs > thresh? true
+d= 10.0 px= -10.19 py= -14.92 c= 6869 obs= 3276.7 thresh= 23.18 obs > thresh? true
+d= 10.5 px= -10.13 py= -15.42 c= 6869 obs= 3276.7 thresh= 24.29 obs > thresh? true
+d= 11.0 px= -10.08 py= -15.92 c= 6869 obs= 3276.7 thresh= 25.40 obs > thresh? true
+d= 11.5 px= -10.02 py= -16.42 c= 6979 obs= 3276.7 thresh= 26.51 obs > thresh? true
+d= 12.0 px= -9.97 py= -16.91 c= 6980 obs= 3276.7 thresh= 27.62 obs > thresh? true
+d= 12.5 px= -9.91 py= -17.41 c= 6980 obs= 3276.7 thresh= 28.73 obs > thresh? true
+d= 13.0 px= -9.86 py= -17.91 c= 6980 obs= 3276.7 thresh= 29.84 obs > thresh? true
+d= 13.5 px= -9.80 py= -18.40 c= 7090 obs= 3276.7 thresh= 30.95 obs > thresh? true
+d= 14.0 px= -9.75 py= -18.90 c= 7090 obs= 3276.7 thresh= 32.06 obs > thresh? true
+d= 14.5 px= -9.69 py= -19.40 c= 7090 obs= 3276.7 thresh= 33.17 obs > thresh? true
+d= 15.0 px= -9.64 py= -19.89 c= 7090 obs= 3276.7 thresh= 34.28 obs > thresh? true
+d= 15.5 px= -9.58 py= -20.39 c= 7200 obs= 3276.7 thresh= 35.39 obs > thresh? true
+d= 16.0 px= -9.53 py= -20.89 c= 7200 obs= 3276.7 thresh= 36.49 obs > thresh? true
+d= 16.5 px= -9.47 py= -21.39 c= 7200 obs= 3276.7 thresh= 37.60 obs > thresh? true
+d= 17.0 px= -9.42 py= -21.88 c= 7200 obs= 3276.7 thresh= 38.71 obs > thresh? true
+d= 17.5 px= -9.37 py= -22.38 c= 7310 obs= 3276.7 thresh= 39.82 obs > thresh? true
+d= 18.0 px= -9.31 py= -22.88 c= 7310 obs= 3276.7 thresh= 40.93 obs > thresh? true
+d= 18.5 px= -9.26 py= -23.37 c= 7310 obs= 3276.7 thresh= 42.04 obs > thresh? true
+d= 19.0 px= -9.20 py= -23.87 c= 7310 obs= 3276.7 thresh= 43.15 obs > thresh? true
+d= 19.5 px= -9.15 py= -24.37 c= 7420 obs= 3276.7 thresh= 44.26 obs > thresh? true
+
+I can see the obstacle is higher than threshold. But something's not right - the result is 0. The issue is likely that even though we're detecting shade, we're not counting it in the final result. Wait, my trace shows it's detecting shade. Let me run the full algorithm and check:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { fromFrame, cellOf } from './src/geometry.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const ex = Math.sin(3.0316692789970405);
+const ny = Math.cos(3.0316692789970405);
+const rise = Math.tan(1.1472973514160205);
+const maxTop = 3276.7;
+
+let shaded = 0;
+let n = 0;
+
+for (const f of scene.courts) {
+  const h0 = f.z + 1;
+  const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+  
+  const samples = [];
+  for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+    for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+      samples.push(fromFrame(f, a, b));
+    }
+  }
+  
+  for (const [px0, py0] of samples) {
+    n++;
+    console.log('Sample:', px0, py0);
+    for (let d = 0.5; d < maxD; d += 0.5) {
+      const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
+      if (c < 0) {
+        console.log('  c=-1, break');
+        break;
+      }
+      const obstacleHeight = scene.top[c] / 10;
+      const threshold = h0 + d * rise;
+      if (obstacleHeight > -32768 && obstacleHeight > threshold) {
+        shaded++;
+        console.log('  SHADED at d=' + d.toFixed(1));
+        break;
+      }
+    }
+  }
+}
+
+console.log('n=', n, 'shaded=', shaded, 'result=', n > 0 ? shaded / n : 0);
+" 2>&1 | head -50
+
+
+Sample: -11.285 -4.985
+  SHADED at d=0.5
+Sample: -11.285 -3.5850000000000004
+  SHADED at d=0.5
+Sample: -11.285 -2.1850000000000005
+  SHADED at d=0.5
+Sample: -11.285 -0.7850000000000006
+  SHADED at d=0.5
+Sample: -11.285 0.6149999999999993
+  SHADED at d=0.5
+Sample: -11.285 2.0149999999999992
+  SHADED at d=0.5
+Sample: -11.285 3.414999999999999
+  SHADED at d=0.5
+Sample: -11.285 4.8149999999999995
+  SHADED at d=0.5
+Sample: -9.885 -4.985
+  SHADED at d=0.5
+Sample: -9.885 -3.5850000000000004
+  SHADED at d=0.5
+Sample: -9.885 -2.1850000000000005
+  SHADED at d=0.5
+Sample: -9.885 -0.7850000000000006
+  SHADED at d=0.5
+Sample: -9.885 0.6149999999999993
+  SHADED at d=0.5
+Sample: -9.885 2.0149999999999992
+  SHADED at d=0.5
+Sample: -9.885 3.414999999999999
+  SHADED at d=0.5
+Sample: -9.885 4.8149999999999995
+  SHADED at d=0.5
+Sample: -8.485 -4.985
+  SHADED at d=0.5
+Sample: -8.485 -3.5850000000000004
+  SHADED at d=0.5
+Sample: -8.485 -2.1850000000000005
+  SHADED at d=0.5
+Sample: -8.485 -0.7850000000000006
+  SHADED at d=0.5
+Sample: -8.485 0.6149999999999993
+  SHADED at d=0.5
+Sample: -8.485 2.0149999999999992
+  SHADED at d=0.5
+Sample: -8.485 3.414999999999999
+  SHADED at d=0.5
+Sample: -8.485 4.8149999999999995
+  SHADED at d=0.5
+Sample: -7.084999999999999 -4.985
+  SHADED at d=0.5
+
+The trace shows it works! Let me check my actual shade.js implementation file more carefully:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat src/shade.js
+
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) break;
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shaded++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return n ? shaded / n : 0;
+}
+
+The code matches my debug code. Let me check if Node is caching or if there's an import issue. Let me do a fresh test:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && rm -rf node_modules/.v8 && node -e "
+const { shadeAt } = await import('./src/shade.js');
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+console.log('Result:', shadeAt(scene, new Date('2026-06-21T20:00:00Z')));
+"
+
+
+Result: 0
+
+There must be something subtle. Let me trace through exactly as the actual file does, checking cell indices:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { fromFrame, cellOf } from './src/geometry.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const ex = Math.sin(3.0316692789970405);
+const ny = Math.cos(3.0316692789970405);
+const rise = Math.tan(1.1472973514160205);
+const maxTop = 3276.7;
+
+console.log('getCell check:');
+const px = -11.23;
+const py = -5.48;
+const i = Math.floor((px + scene.radius) / scene.cell);
+const j = Math.floor((scene.radius - py) / scene.cell);
+console.log('px,py:', px, py);
+console.log('i, j:', i, j);
+const c = j * scene.g + i;
+console.log('c (calculated):', c);
+console.log('c (from cellOf):', cellOf(scene, px, py));
+console.log('top[c]:', scene.top[c]);
+"
+
+
+getCell check:
+px,py: -11.23 -5.48
+i, j: 49 57
+c (calculated): 6319
+c (from cellOf): 6319
+top[c]: 32767
+
+Everything works. Let me check the loop bounds - maybe there's trouble with very large maxD hitting numeric precision issues:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { fromFrame, cellOf } from './src/geometry.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const ex = Math.sin(3.0316692789970405);
+const ny = Math.cos(3.0316692789970405);
+const rise = Math.tan(1.1472973514160205);
+const maxTop = 3276.7;
+
+const h0 = 0 + 1;
+const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+console.log('maxD:', maxD);
+
+// Test a single sample
+const [px0, py0] = fromFrame(scene.courts[0], -scene.courts[0].pl / 2 + 0.6, -scene.courts[0].pw / 2 + 0.5);
+
+let shaded = false;
+let n = 0;
+
+// Just walk one sample
+for (let d = 0.5; d < maxD; d += 0.5) {
+  n++;
+  const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
+  console.log(n + ': d=' + d.toFixed(1) + ' c=' + c);
+  if (c < 0) {
+    console.log('c < 0 break');
+    break;
+  }
+  const obstacleHeight = scene.top[c] / 10;
+  const threshold = h0 + d * rise;
+  console.log('   obs=' + obstacleHeight + ' thresh=' + threshold.toFixed(2) + ' comb=' + (obstacleHeight > -32768 && obstacleHeight > threshold));
+  if (obstacleHeight > -32768 && obstacleHeight > threshold) {
+    shaded = true;
+    console.log('SHADED!');
+    break;
+  }
+}
+console.log('n=' + n + ' shaded=' + shaded + ' result=' + (shaded || 0));
+"
+
+
+maxD: 165
+1: d=0.5 c=6319
+   obs=3276.7 thresh=2.11 comb=true
+SHADED!
+n=1 shaded=true result=true
+
+It works in the inline trace! Let me check if module caching is the issue, or if the return is correct:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node --experimental-vm-modules -e "
+import { shadeAt } from './src/shade.js';
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+const result = shadeAt(scene, new Date('2026-06-21T20:00:00Z'));
+console.log('typeof result:', typeof result);
+console.log('result:', result);
+console.log('is NaN:', Number.isNaN(result));
+console.log('result === 1:', result === 1);
+console.log('result == 1:', result == 1);
+"
+
+
+typeof result: number
+result: 0
+is NaN: false
+result === 1: false
+result == 1: false
+
+Let me add some debug logging directly to shade.js and run again:
+
+
+  ────────────────────────────────────────
+  ▸ write
+    path src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('DEBUG shadeAt: s.alt=', s.alt, 's.bearing=', s.bearing);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('DEBUG: ex=', ex, 'ny=', ny, 'rise=', rise);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  console.log('DEBUG: maxTop=', maxTop);
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    console.log('DEBUG court h0=', h0, 'maxD=', maxD);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    console.log('DEBUG court samples count:', samples.length);
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      console.log('DEBUG sample n=' + n + ' px0=' + px0 + ' py0=' + py0);
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) {
+          console.log('DEBUG c < 0 break at d=' + d);
+          break;
+        }
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        const threshold = h0 + d * rise;
+        console.log('DEBUG d=' + d + ' c=' + c + ' obs=' + obstacleHeight + ' thresh=' + threshold);
+        if (obstacleHeight > -32768 && obstacleHeight > threshold) {
+          shaded++;
+          console.log('DEBUG SHADED!');
+          break;
+        }
+      }
+    }
+  }
+  console.log('DEBUG final: n=' + n + ' shaded=' + shaded);
+  return n ? shaded / n : 0;
+}
+
+
+Wrote src/shade.js (74 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1
+
+  duration_ms: 0.9145
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 2.455083
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 74.525417
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://work/weak/goose/rally-3d-shade-0/test/shade.test.js:35:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.472666
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 88.253375
+
+Command exited with code 1[Output exceeded 2000 line limit (45083 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/stdout-1. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+[Output exceeded 2000 line limit (45083 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/output-1. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | sed -n '1,50p'
+
+DEBUG shadeAt: s.alt= 1.1472973514160205 s.bearing= 3.0316692789970405
+DEBUG: ex= 0.10970213822417842 ny= -0.9939645068457139 rise= 2.218397226982552
+DEBUG: maxTop= -Infinity
+DEBUG court h0= 1 maxD= -Infinity
+DEBUG court samples count: 136
+DEBUG sample n=1 px0=-11.285 py0=-4.985
+DEBUG sample n=2 px0=-11.285 py0=-3.5850000000000004
+DEBUG sample n=3 px0=-11.285 py0=-2.1850000000000005
+DEBUG sample n=4 px0=-11.285 py0=-0.7850000000000006
+DEBUG sample n=5 px0=-11.285 py0=0.6149999999999993
+DEBUG sample n=6 px0=-11.285 py0=2.0149999999999992
+DEBUG sample n=7 px0=-11.285 py0=3.414999999999999
+DEBUG sample n=8 px0=-11.285 py0=4.8149999999999995
+DEBUG sample n=9 px0=-9.885 py0=-4.985
+DEBUG sample n=10 px0=-9.885 py0=-3.5850000000000004
+DEBUG sample n=11 px0=-9.885 py0=-2.1850000000000005
+DEBUG sample n=12 px0=-9.885 py0=-0.7850000000000006
+DEBUG sample n=13 px0=-9.885 py0=0.6149999999999993
+DEBUG sample n=14 px0=-9.885 py0=2.0149999999999992
+DEBUG sample n=15 px0=-9.885 py0=3.414999999999999
+DEBUG sample n=16 px0=-9.885 py0=4.8149999999999995
+DEBUG sample n=17 px0=-8.485 py0=-4.985
+DEBUG sample n=18 px0=-8.485 py0=-3.5850000000000004
+DEBUG sample n=19 px0=-8.485 py0=-2.1850000000000005
+DEBUG sample n=20 px0=-8.485 py0=-0.7850000000000006
+DEBUG sample n=21 px0=-8.485 py0=0.6149999999999993
+DEBUG sample n=22 px0=-8.485 py0=2.0149999999999992
+DEBUG sample n=23 px0=-8.485 py0=3.414999999999999
+DEBUG sample n=24 px0=-8.485 py0=4.8149999999999995
+DEBUG sample n=25 px0=-7.084999999999999 py0=-4.985
+DEBUG sample n=26 px0=-7.084999999999999 py0=-3.5850000000000004
+DEBUG sample n=27 px0=-7.084999999999999 py0=-2.1850000000000005
+DEBUG sample n=28 px0=-7.084999999999999 py0=-0.7850000000000006
+DEBUG sample n=29 px0=-7.084999999999999 py0=0.6149999999999993
+DEBUG sample n=30 px0=-7.084999999999999 py0=2.0149999999999992
+DEBUG sample n=31 px0=-7.084999999999999 py0=3.414999999999999
+DEBUG sample n=32 px0=-7.084999999999999 py0=4.8149999999999995
+DEBUG sample n=33 px0=-5.684999999999999 py0=-4.985
+DEBUG sample n=34 px0=-5.684999999999999 py0=-3.5850000000000004
+DEBUG sample n=35 px0=-5.684999999999999 py0=-2.1850000000000005
+DEBUG sample n=36 px0=-5.684999999999999 py0=-0.7850000000000006
+DEBUG sample n=37 px0=-5.684999999999999 py0=0.6149999999999993
+DEBUG sample n=38 px0=-5.684999999999999 py0=2.0149999999999992
+DEBUG sample n=39 px0=-5.684999999999999 py0=3.414999999999999
+DEBUG sample n=40 px0=-5.684999999999999 py0=4.8149999999999995
+DEBUG sample n=41 px0=-4.284999999999998 py0=-4.985
+DEBUG sample n=42 px0=-4.284999999999998 py0=-3.5850000000000004
+DEBUG sample n=43 px0=-4.284999999999998 py0=-2.1850000000000005
+DEBUG sample n=44 px0=-4.284999999999998 py0=-0.7850000000000006
+DEBUG sample n=45 px0=-4.284999999999998 py0=0.6149999999999993
+
+Found it! `maxTop= -Infinity`! The issue is in my loop - the comparison `h > -32768` will only be true for values > -32768. But in the test, all values are 32767, so they should pass. Let me check what's happening. Actually, looking at the reference code in `reference/viewer-shade.ts`, it checks `topDm[c] !== -32768` first. In the test, all values are 32767 which is > -32768, so this should work.
+
+Wait - let me check the signedness. In JavaScript `32767 > -32768` is true. So why is maxTop still -Infinity?
+
+Oh! The issue is that array iteration might be yielding `-32768` for some elements OR my comparison logic is wrong. Let me check:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const top = new Array(110 * 110).fill(32767);
+console.log('top[0]:', top[0]);
+console.log('top[0] > -32768:', top[0] > -32768);
+let maxTop = -Infinity;
+for (const h of top) {
+  console.log('h:', h, '>', h > -32768);
+  if (h > -32768) {
+    maxTop = Math.max(maxTop, h / 10);
+  }
+}
+console.log('maxTop:', maxTop);
+"
+
+
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+h: 32767 > true
+maxTop: 3276.7[Output exceeded 2000 line limit (12103 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/stdout-3. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+[Output exceeded 2000 line limit (12103 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/output-3. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+
+That works! So the issue must be something else. Let me check the test again - maybe it's using a different scene or something else is happening:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { shadeAt } from './src/shade.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+console.log('scene.top type:', typeof scene.top);
+console.log('scene.top length:', scene.top.length);
+console.log('scene.top sample values:', scene.top[0], scene.top[100], scene.top[screen.top.length - 1]);
+
+const result = shadeAt(scene, new Date('2026-06-21T20:00:00Z'));
+console.log('result:', result);
+" 2>&1 | grep -E "(DEBUG|scene|result)"
+
+
+scene.top type: object
+scene.top length: 12100
+console.log('scene.top sample values:', scene.top[0], scene.top[100], scene.top[screen.top.length - 1]);
+
+The grep output is getting garbled. Let me try without grep:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 > /tmp/tmp_debug.txt && node -e "
+import { shadeAt } from './src/shade.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const result = shadeAt(scene, new Date('2026-06-21T20:00:00Z'));
+console.log('result:', result);
+" 2>&1
+
+DEBUG d=141 c=NaN obs=NaN thresh=313.7940090045398
+DEBUG d=141.5 c=NaN obs=NaN thresh=314.9032076180311
+DEBUG d=142 c=NaN obs=NaN thresh=316.01240623152233
+DEBUG d=142.5 c=NaN obs=NaN thresh=317.1216048450136
+DEBUG d=143 c=NaN obs=NaN thresh=318.2308034585049
+DEBUG d=143.5 c=NaN obs=NaN thresh=319.3400020719962
+DEBUG d=144 c=NaN obs=NaN thresh=320.4492006854875
+DEBUG d=144.5 c=NaN obs=NaN thresh=321.5583992989787
+DEBUG d=145 c=NaN obs=NaN thresh=322.66759791247
+DEBUG d=145.5 c=NaN obs=NaN thresh=323.7767965259613
+DEBUG d=146 c=NaN obs=NaN thresh=324.8859951394526
+DEBUG d=146.5 c=NaN obs=NaN thresh=325.99519375294386
+DEBUG d=147 c=NaN obs=NaN thresh=327.1043923664351
+DEBUG d=147.5 c=NaN obs=NaN thresh=328.2135909799264
+DEBUG d=148 c=NaN obs=NaN thresh=329.32278959341767
+DEBUG d=148.5 c=NaN obs=NaN thresh=330.43198820690895
+DEBUG d=149 c=NaN obs=NaN thresh=331.54118682040024
+DEBUG d=149.5 c=NaN obs=NaN thresh=332.6503854338915
+DEBUG d=150 c=NaN obs=NaN thresh=333.75958404738276
+DEBUG d=150.5 c=NaN obs=NaN thresh=334.86878266087405
+DEBUG d=151 c=NaN obs=NaN thresh=335.97798127436533
+DEBUG d=151.5 c=NaN obs=NaN thresh=337.0871798878566
+DEBUG d=152 c=NaN obs=NaN thresh=338.19637850134785
+DEBUG d=152.5 c=NaN obs=NaN thresh=339.30557711483914
+DEBUG d=153 c=NaN obs=NaN thresh=340.4147757283304
+DEBUG d=153.5 c=NaN obs=NaN thresh=341.5239743418217
+DEBUG d=154 c=NaN obs=NaN thresh=342.633172955313
+DEBUG d=154.5 c=NaN obs=NaN thresh=343.74237156880423
+DEBUG d=155 c=NaN obs=NaN thresh=344.8515701822955
+DEBUG d=155.5 c=NaN obs=NaN thresh=345.9607687957868
+DEBUG d=156 c=NaN obs=NaN thresh=347.0699674092781
+DEBUG d=156.5 c=NaN obs=NaN thresh=348.1791660227694
+DEBUG d=157 c=NaN obs=NaN thresh=349.2883646362606
+DEBUG d=157.5 c=NaN obs=NaN thresh=350.3975632497519
+DEBUG d=158 c=NaN obs=NaN thresh=351.5067618632432
+DEBUG d=158.5 c=NaN obs=NaN thresh=352.6159604767345
+DEBUG d=159 c=NaN obs=NaN thresh=353.72515909022576
+DEBUG d=159.5 c=NaN obs=NaN thresh=354.834357703717
+DEBUG d=160 c=NaN obs=NaN thresh=355.9435563172083
+DEBUG d=160.5 c=NaN obs=NaN thresh=357.05275493069956
+DEBUG d=161 c=NaN obs=NaN thresh=358.16195354419085
+DEBUG d=161.5 c=NaN obs=NaN thresh=359.27115215768214
+DEBUG d=162 c=NaN obs=NaN thresh=360.38035077117337
+DEBUG d=162.5 c=NaN obs=NaN thresh=361.48954938466466
+DEBUG d=163 c=NaN obs=NaN thresh=362.59874799815594
+DEBUG d=163.5 c=NaN obs=NaN thresh=363.70794661164723
+DEBUG d=164 c=NaN obs=NaN thresh=364.8171452251385
+DEBUG d=164.5 c=NaN obs=NaN thresh=365.92634383862975
+DEBUG final: n=136 shaded=0
+result: 0[Output exceeded 2000 line limit (44887 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/stdout-5. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+[Output exceeded 2000 line limit (44887 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/output-5. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+
+The issue is clear - `c=NaN`! The cellOf function is returning NaN. This is happening at d=141. The grid is only 110x110 and we're walking far beyond the grid. But wait, the test says we should check up to `maxD = min(scene.radius * 1.5, ...)`, and scene.radius * 1.5 = 165.
+
+The issue is that `cellOf` returns -1 when a point is outside the grid, but `d < -1` is true in JavaScript (any positive number is less than a negative infinity), so we should break out when c = -1. But we're getting NaN!
+
+Let me check cellOf:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { cellOf } from './src/geometry.js';
+
+const scene = { radius: 110, cell: 2, g: 110 };
+
+// Point well inside
+const c1 = cellOf(scene, 10, 10);
+console.log('inner (10,10):', c1);
+
+// Point on edge
+const c2 = cellOf(scene, 110-1, 0);
+console.log('edge (109,0):', c2);
+
+// Point outside (just beyond grid)
+const c3 = cellOf(scene, 111, 0);
+console.log('outside (111,0):', c3);
+
+// Very far out
+const c4 = cellOf(scene, 1000, 1000);
+console.log('far out (1000,1000):', c4);
+
+// Large d test
+const ex = 0.10970213822417842;
+const ny = -0.9939645068457139;
+const px0 = -11.285;
+const py0 = -4.985;
+
+for (let d = 140; d <= 145; d++) {
+  const px = px0 + ex * d;
+  const py = py0 + ny * d;
+  console.log('d=' + d + ' px=' + px + ' py=' + py + ' c=' + cellOf(scene, px, py));
+}
+"
+
+
+inner (10,10): 5560
+edge (109,0): 6159
+outside (111,0): -1
+far out (1000,1000): -1
+d=140 px=4.0732993513849785 py=-144.14003095839996 c=-1
+d=141 px=4.183001489609156 py=-145.13399546524568 c=-1
+d=142 px=4.292703627833335 py=-146.1279599720914 c=-1
+d=143 px=4.402405766057514 py=-147.1219244789371 c=-1
+d=144 px=4.512107904281692 py=-148.11588898578282 c=-1
+d=145 px=4.621810042505871 py=-149.10985349262853 c=-1
+
+That's working correctly - it returns -1. So in the code, `if (c < 0) break;` should trigger. But we're seeing c=NaN in the debug output, which means something's different.
+
+Wait, let me look more carefully. The debug shows `c=NaN` starting at d=141. Let me trace exactly:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { shadeAt, cellOf } from './src/geometry.js';
+" 2>&1 | head -10
+
+
+file://work/weak/goose/rally-3d-shade-0/[eval1]:2
+import { shadeAt, cellOf } from './src/geometry.js';
+         ^^^^^^^
+SyntaxError: The requested module './src/geometry.js' does not provide an export named 'shadeAt'
+    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:272:26)
+    at async ModuleLoader.executeModuleJob (node:internal/modules/esm/loader:268:20)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+
+Let me look at what happens when the cellOf is called later - the NaN must be coming from somewhere:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { cellOf } from './src/geometry.js';
+
+const camera = { radius: 110, cell: 2, g: 110 };
+
+const px = 4.183001489609156;
+const py = -145.13399546524568;
+
+const i = Math.floor((px + camera.radius) / camera.cell);
+const j = Math.floor((camera.radius - py) / camera.cell);
+console.log('px,py:', px, py);
+console.log('i, j:', i, j);
+console.log('px + radius:', px + camera.radius);
+console.log('camera.radius - py:', camera.radius - py);
+console.log('(px + radius) / cell:', (px + camera.radius) / camera.cell);
+console.log('(camera.radius - py) / cell:', (camera.radius - py) / camera.cell);
+"
+
+
+px,py: 4.183001489609156 -145.13399546524568
+i, j: 57 127
+px + radius: 114.18300148960915
+camera.radius - py: 255.13399546524568
+(px + radius) / cell: 57.09150074480458
+(camera.radius - py) / cell: 127.56699773262284
+
+j = 127, but g = 110, so j >= g is true, meaning `cellOf` should return -1. This is working correctly. So the c=-1 break should happen at d around 140-141. But I'm seeing NaN at d=141.
+
+Wait, let me check if maybe the actual shadeAt function is seeing NaN somewhere else:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const { cellOf } = await import('./src/geometry.js');
+
+const scene = { radius: 110, cell: 2, g: 110 };
+
+// Test with d=140 and d=141
+const ex = 0.10970213822417842;
+const ny = -0.9939645068457139;
+const px0 = -11.285;
+const py0 = -4.985;
+
+for (let d = 140; d <= 141.5; d += 0.5) {
+  const px = px0 + ex * d;
+  const py = py0 + ny * d;
+  console.log('d=' + d.toFixed(1) + ' px=' + px.toFixed(2) + ' py=' + py.toFixed(2));
+  const c = cellOf(scene, px, py);
+  console.log('  c=' + c + ' (type: ' + typeof c + ')');
+  console.log('  c < 0?', c < 0);
+}
+"
+
+
+d=140.0 px=4.07 py=-144.14
+  c=-1 (type: number)
+  c < 0? true
+d=140.5 px=4.13 py=-144.64
+  c=-1 (type: number)
+  c < 0? true
+d=141.0 px=4.18 py=-145.13
+  c=-1 (type: number)
+  c < 0? true
+d=141.5 px=4.24 py=-145.63
+  c=-1 (type: number)
+  c < 0? true
+
+So cellOf correctly returns -1. The break should happen. But NaN is appearing in shadeAt. Let me check if maybe the scene parameter is getting corrupted:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const { cellOf } = await import('./src/geometry.js');
+
+const px = 4.183001489609156;
+const py = -145.13399546524568;
+
+const c = cellOf({ radius: 110, cell: 2, g: 110 }, px, py);
+console.log('cellOf result:', c);
+
+// Now with NaN injection
+const c2 = cellOf({ radius: NaN, cell: 2, g: 110 }, px, py);
+console.log('cellOf with NaN radius:', c2);
+"
+
+
+cellOf result: -1
+cellOf with NaN radius: NaN
+
+Aha! If `scene.radius` is NaN, then cellOf returns NaN! Let me check if somehow the scene parameter doesn't have the radius set. Wait, but the test case I created does set radius: 110. Let me check my code once more:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+console.log('scene keys:', Object.keys(scene));
+console.log('scene.radius:', scene.radius);
+console.log('scene.radius type:', typeof scene.radius);
+
+// Check iteration
+let foundValid = false;
+for (const h of scene.top) {
+  console.log('iterating, h=' + h + ' > -32768?', h > -32768);
+  if (h > -32768) {
+    foundValid = true;
+    console.log('found valid h');
+    break;
+  }
+}
+console.log('foundValid:', foundValid);
+"
+
+
+scene keys: [
+  'lat',    'lng',
+  'radius', 'cell',
+  'g',      'courts',
+  'top'
+]
+scene.radius: 110
+scene.radius type: number
+iterating, h=32767 > -32768? true
+found valid h
+foundValid: true
+
+Everything looks fine. The scene has radius 110 and the iteration is working. Wait - I see in the debug output:
+
+```
+DEBUG: maxTop= -Infinity
+```
+
+That's the problem! Let me check where that's coming from. The loop should be finding 32767 values. Let me add more debug:
+
+
+  ────────────────────────────────────────
+  ▸ write
+    path src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('DEBUG shadeAt: s.alt=', s.alt, 's.bearing=', s.bearing);
+  console.log('DEBUG scene:', scene);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('DEBUG: ex=', ex, 'ny=', ny, 'rise=', rise);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  console.log('DEBUG iterating through top, length:', scene.top.length);
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  console.log('DEBUG: maxTop=', maxTop);
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    console.log('DEBUG court h0=', h0, 'maxD=', maxD);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    console.log('DEBUG court samples count:', samples.length);
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      console.log('DEBUG sample n=' + n + ' px0=' + px0 + ' py0=' + py0);
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
+        if (c < 0) {
+          console.log('DEBUG c < 0 break at d=' + d);
+          break;
+        }
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        const threshold = h0 + d * rise;
+        console.log('DEBUG d=' + d + ' c=' + c + ' obs=' + obstacleHeight + ' thresh=' + threshold);
+        if (obstacleHeight > -32768 && obstacleHeight > threshold) {
+          shaded++;
+          console.log('DEBUG SHADED!');
+          break;
+        }
+      }
+    }
+  }
+  console.log('DEBUG final: n=' + n + ' shaded=' + shaded);
+  return n ? shaded / n : 0;
+}
+
+
+Wrote src/shade.js (76 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { shadeAt } from './src/shade.js';
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const result = shadeAt(scene, new Date('2026-06-21T20:00:00Z'));
+console.log('result:', result);
+" 2>&1 | grep -E "(DEBUG|result)"
+
+
+DEBUG shadeAt: s.alt= 1.1472973514160205 s.bearing= 3.0316692789970405
+DEBUG scene: {
+DEBUG: ex= 0.10970213822417842 ny= -0.9939645068457139 rise= 2.218397226982552
+DEBUG iterating through top, length: 12100
+DEBUG: maxTop= 3276.7
+DEBUG court h0= 1 maxD= 165
+DEBUG court samples count: 136
+DEBUG sample n=1 px0=-11.285 py0=-4.985
+DEBUG d=0.5 c=6319 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=2 px0=-11.285 py0=-3.5850000000000004
+DEBUG d=0.5 c=6319 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=3 px0=-11.285 py0=-2.1850000000000005
+DEBUG d=0.5 c=6209 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=4 px0=-11.285 py0=-0.7850000000000006
+DEBUG d=0.5 c=6099 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=5 px0=-11.285 py0=0.6149999999999993
+DEBUG d=0.5 c=5989 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=6 px0=-11.285 py0=2.0149999999999992
+DEBUG d=0.5 c=5989 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=7 px0=-11.285 py0=3.414999999999999
+DEBUG d=0.5 c=5879 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=8 px0=-11.285 py0=4.8149999999999995
+DEBUG d=0.5 c=5769 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=9 px0=-9.885 py0=-4.985
+DEBUG d=0.5 c=6320 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=10 px0=-9.885 py0=-3.5850000000000004
+DEBUG d=0.5 c=6320 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=11 px0=-9.885 py0=-2.1850000000000005
+DEBUG d=0.5 c=6210 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=12 px0=-9.885 py0=-0.7850000000000006
+DEBUG d=0.5 c=6100 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=13 px0=-9.885 py0=0.6149999999999993
+DEBUG d=0.5 c=5990 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=14 px0=-9.885 py0=2.0149999999999992
+DEBUG d=0.5 c=5990 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=15 px0=-9.885 py0=3.414999999999999
+DEBUG d=0.5 c=5880 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=16 px0=-9.885 py0=4.8149999999999995
+DEBUG d=0.5 c=5770 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=17 px0=-8.485 py0=-4.985
+DEBUG d=0.5 c=6320 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=18 px0=-8.485 py0=-3.5850000000000004
+DEBUG d=0.5 c=6320 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=19 px0=-8.485 py0=-2.1850000000000005
+DEBUG d=0.5 c=6210 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=20 px0=-8.485 py0=-0.7850000000000006
+DEBUG d=0.5 c=6100 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=21 px0=-8.485 py0=0.6149999999999993
+DEBUG d=0.5 c=5990 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=22 px0=-8.485 py0=2.0149999999999992
+DEBUG d=0.5 c=5990 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=23 px0=-8.485 py0=3.414999999999999
+DEBUG d=0.5 c=5880 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=24 px0=-8.485 py0=4.8149999999999995
+DEBUG d=0.5 c=5770 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=25 px0=-7.084999999999999 py0=-4.985
+DEBUG d=0.5 c=6321 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=26 px0=-7.084999999999999 py0=-3.5850000000000004
+DEBUG d=0.5 c=6321 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=27 px0=-7.084999999999999 py0=-2.1850000000000005
+DEBUG d=0.5 c=6211 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=28 px0=-7.084999999999999 py0=-0.7850000000000006
+DEBUG d=0.5 c=6101 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=29 px0=-7.084999999999999 py0=0.6149999999999993
+DEBUG d=0.5 c=5991 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=30 px0=-7.084999999999999 py0=2.0149999999999992
+DEBUG d=0.5 c=5991 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=31 px0=-7.084999999999999 py0=3.414999999999999
+DEBUG d=0.5 c=5881 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=32 px0=-7.084999999999999 py0=4.8149999999999995
+DEBUG d=0.5 c=5771 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=33 px0=-5.684999999999999 py0=-4.985
+DEBUG d=0.5 c=6322 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=34 px0=-5.684999999999999 py0=-3.5850000000000004
+DEBUG d=0.5 c=6322 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=35 px0=-5.684999999999999 py0=-2.1850000000000005
+DEBUG d=0.5 c=6212 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=36 px0=-5.684999999999999 py0=-0.7850000000000006
+DEBUG d=0.5 c=6102 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=37 px0=-5.684999999999999 py0=0.6149999999999993
+DEBUG d=0.5 c=5992 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=38 px0=-5.684999999999999 py0=2.0149999999999992
+DEBUG d=0.5 c=5992 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=39 px0=-5.684999999999999 py0=3.414999999999999
+DEBUG d=0.5 c=5882 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=40 px0=-5.684999999999999 py0=4.8149999999999995
+DEBUG d=0.5 c=5772 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=41 px0=-4.284999999999998 py0=-4.985
+DEBUG d=0.5 c=6322 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=42 px0=-4.284999999999998 py0=-3.5850000000000004
+DEBUG d=0.5 c=6322 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=43 px0=-4.284999999999998 py0=-2.1850000000000005
+DEBUG d=0.5 c=6212 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=44 px0=-4.284999999999998 py0=-0.7850000000000006
+DEBUG d=0.5 c=6102 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=45 px0=-4.284999999999998 py0=0.6149999999999993
+DEBUG d=0.5 c=5992 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=46 px0=-4.284999999999998 py0=2.0149999999999992
+DEBUG d=0.5 c=5992 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=47 px0=-4.284999999999998 py0=3.414999999999999
+DEBUG d=0.5 c=5882 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=48 px0=-4.284999999999998 py0=4.8149999999999995
+DEBUG d=0.5 c=5772 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=49 px0=-2.8849999999999985 py0=-4.985
+DEBUG d=0.5 c=6323 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=50 px0=-2.8849999999999985 py0=-3.5850000000000004
+DEBUG d=0.5 c=6323 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=51 px0=-2.8849999999999985 py0=-2.1850000000000005
+DEBUG d=0.5 c=6213 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=52 px0=-2.8849999999999985 py0=-0.7850000000000006
+DEBUG d=0.5 c=6103 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=53 px0=-2.8849999999999985 py0=0.6149999999999993
+DEBUG d=0.5 c=5993 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=54 px0=-2.8849999999999985 py0=2.0149999999999992
+DEBUG d=0.5 c=5993 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=55 px0=-2.8849999999999985 py0=3.414999999999999
+DEBUG d=0.5 c=5883 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=56 px0=-2.8849999999999985 py0=4.8149999999999995
+DEBUG d=0.5 c=5773 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=57 px0=-1.4849999999999985 py0=-4.985
+DEBUG d=0.5 c=6324 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=58 px0=-1.4849999999999985 py0=-3.5850000000000004
+DEBUG d=0.5 c=6324 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=59 px0=-1.4849999999999985 py0=-2.1850000000000005
+DEBUG d=0.5 c=6214 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=60 px0=-1.4849999999999985 py0=-0.7850000000000006
+DEBUG d=0.5 c=6104 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=61 px0=-1.4849999999999985 py0=0.6149999999999993
+DEBUG d=0.5 c=5994 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=62 px0=-1.4849999999999985 py0=2.0149999999999992
+DEBUG d=0.5 c=5994 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=63 px0=-1.4849999999999985 py0=3.414999999999999
+DEBUG d=0.5 c=5884 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=64 px0=-1.4849999999999985 py0=4.8149999999999995
+DEBUG d=0.5 c=5774 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=65 px0=-0.08499999999999863 py0=-4.985
+DEBUG d=0.5 c=6324 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=66 px0=-0.08499999999999863 py0=-3.5850000000000004
+DEBUG d=0.5 c=6324 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=67 px0=-0.08499999999999863 py0=-2.1850000000000005
+DEBUG d=0.5 c=6214 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=68 px0=-0.08499999999999863 py0=-0.7850000000000006
+DEBUG d=0.5 c=6104 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=69 px0=-0.08499999999999863 py0=0.6149999999999993
+DEBUG d=0.5 c=5994 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=70 px0=-0.08499999999999863 py0=2.0149999999999992
+DEBUG d=0.5 c=5994 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=71 px0=-0.08499999999999863 py0=3.414999999999999
+DEBUG d=0.5 c=5884 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=72 px0=-0.08499999999999863 py0=4.8149999999999995
+DEBUG d=0.5 c=5774 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=73 px0=1.3150000000000013 py0=-4.985
+DEBUG d=0.5 c=6325 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=74 px0=1.3150000000000013 py0=-3.5850000000000004
+DEBUG d=0.5 c=6325 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=75 px0=1.3150000000000013 py0=-2.1850000000000005
+DEBUG d=0.5 c=6215 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=76 px0=1.3150000000000013 py0=-0.7850000000000006
+DEBUG d=0.5 c=6105 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=77 px0=1.3150000000000013 py0=0.6149999999999993
+DEBUG d=0.5 c=5995 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=78 px0=1.3150000000000013 py0=2.0149999999999992
+DEBUG d=0.5 c=5995 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=79 px0=1.3150000000000013 py0=3.414999999999999
+DEBUG d=0.5 c=5885 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=80 px0=1.3150000000000013 py0=4.8149999999999995
+DEBUG d=0.5 c=5775 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=81 px0=2.715000000000001 py0=-4.985
+DEBUG d=0.5 c=6326 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=82 px0=2.715000000000001 py0=-3.5850000000000004
+DEBUG d=0.5 c=6326 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=83 px0=2.715000000000001 py0=-2.1850000000000005
+DEBUG d=0.5 c=6216 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=84 px0=2.715000000000001 py0=-0.7850000000000006
+DEBUG d=0.5 c=6106 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=85 px0=2.715000000000001 py0=0.6149999999999993
+DEBUG d=0.5 c=5996 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=86 px0=2.715000000000001 py0=2.0149999999999992
+DEBUG d=0.5 c=5996 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=87 px0=2.715000000000001 py0=3.414999999999999
+DEBUG d=0.5 c=5886 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=88 px0=2.715000000000001 py0=4.8149999999999995
+DEBUG d=0.5 c=5776 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=89 px0=4.115000000000001 py0=-4.985
+DEBUG d=0.5 c=6327 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=90 px0=4.115000000000001 py0=-3.5850000000000004
+DEBUG d=0.5 c=6327 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=91 px0=4.115000000000001 py0=-2.1850000000000005
+DEBUG d=0.5 c=6217 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=92 px0=4.115000000000001 py0=-0.7850000000000006
+DEBUG d=0.5 c=6107 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=93 px0=4.115000000000001 py0=0.6149999999999993
+DEBUG d=0.5 c=5997 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=94 px0=4.115000000000001 py0=2.0149999999999992
+DEBUG d=0.5 c=5997 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=95 px0=4.115000000000001 py0=3.414999999999999
+DEBUG d=0.5 c=5887 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=96 px0=4.115000000000001 py0=4.8149999999999995
+DEBUG d=0.5 c=5777 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=97 px0=5.515000000000001 py0=-4.985
+DEBUG d=0.5 c=6327 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=98 px0=5.515000000000001 py0=-3.5850000000000004
+DEBUG d=0.5 c=6327 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=99 px0=5.515000000000001 py0=-2.1850000000000005
+DEBUG d=0.5 c=6217 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=100 px0=5.515000000000001 py0=-0.7850000000000006
+DEBUG d=0.5 c=6107 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=101 px0=5.515000000000001 py0=0.6149999999999993
+DEBUG d=0.5 c=5997 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=102 px0=5.515000000000001 py0=2.0149999999999992
+DEBUG d=0.5 c=5997 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=103 px0=5.515000000000001 py0=3.414999999999999
+DEBUG d=0.5 c=5887 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=104 px0=5.515000000000001 py0=4.8149999999999995
+DEBUG d=0.5 c=5777 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=105 px0=6.915000000000001 py0=-4.985
+DEBUG d=0.5 c=6328 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=106 px0=6.915000000000001 py0=-3.5850000000000004
+DEBUG d=0.5 c=6328 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=107 px0=6.915000000000001 py0=-2.1850000000000005
+DEBUG d=0.5 c=6218 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=108 px0=6.915000000000001 py0=-0.7850000000000006
+DEBUG d=0.5 c=6108 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=109 px0=6.915000000000001 py0=0.6149999999999993
+DEBUG d=0.5 c=5998 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=110 px0=6.915000000000001 py0=2.0149999999999992
+DEBUG d=0.5 c=5998 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=111 px0=6.915000000000001 py0=3.414999999999999
+DEBUG d=0.5 c=5888 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=112 px0=6.915000000000001 py0=4.8149999999999995
+DEBUG d=0.5 c=5778 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=113 px0=8.315000000000001 py0=-4.985
+DEBUG d=0.5 c=6329 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=114 px0=8.315000000000001 py0=-3.5850000000000004
+DEBUG d=0.5 c=6329 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=115 px0=8.315000000000001 py0=-2.1850000000000005
+DEBUG d=0.5 c=6219 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=116 px0=8.315000000000001 py0=-0.7850000000000006
+DEBUG d=0.5 c=6109 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=117 px0=8.315000000000001 py0=0.6149999999999993
+DEBUG d=0.5 c=5999 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=118 px0=8.315000000000001 py0=2.0149999999999992
+DEBUG d=0.5 c=5999 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=119 px0=8.315000000000001 py0=3.414999999999999
+DEBUG d=0.5 c=5889 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=120 px0=8.315000000000001 py0=4.8149999999999995
+DEBUG d=0.5 c=5779 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=121 px0=9.715000000000002 py0=-4.985
+DEBUG d=0.5 c=6329 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=122 px0=9.715000000000002 py0=-3.5850000000000004
+DEBUG d=0.5 c=6329 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=123 px0=9.715000000000002 py0=-2.1850000000000005
+DEBUG d=0.5 c=6219 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=124 px0=9.715000000000002 py0=-0.7850000000000006
+DEBUG d=0.5 c=6109 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=125 px0=9.715000000000002 py0=0.6149999999999993
+DEBUG d=0.5 c=5999 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=126 px0=9.715000000000002 py0=2.0149999999999992
+DEBUG d=0.5 c=5999 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=127 px0=9.715000000000002 py0=3.414999999999999
+DEBUG d=0.5 c=5889 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=128 px0=9.715000000000002 py0=4.8149999999999995
+DEBUG d=0.5 c=5779 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=129 px0=11.115000000000002 py0=-4.985
+DEBUG d=0.5 c=6330 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=130 px0=11.115000000000002 py0=-3.5850000000000004
+DEBUG d=0.5 c=6330 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=131 px0=11.115000000000002 py0=-2.1850000000000005
+DEBUG d=0.5 c=6220 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=132 px0=11.115000000000002 py0=-0.7850000000000006
+DEBUG d=0.5 c=6110 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=133 px0=11.115000000000002 py0=0.6149999999999993
+DEBUG d=0.5 c=6000 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=134 px0=11.115000000000002 py0=2.0149999999999992
+DEBUG d=0.5 c=6000 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=135 px0=11.115000000000002 py0=3.414999999999999
+DEBUG d=0.5 c=5890 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG sample n=136 px0=11.115000000000002 py0=4.8149999999999995
+DEBUG d=0.5 c=5780 obs=3276.7 thresh=2.1091986134912757
+DEBUG SHADED!
+DEBUG final: n=136 shaded=136
+result: 1
+
+Now it works! `result: 1`. So there's a module caching issue. The import in shade.test.js must have been getting the old version first. The tests are run once and Node caches imports. I need to restart node or clear the cache. Let me run the tests fresh:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && rm -rf /tmp/.v8-cache 2>/dev/null; node test/shade.test.js 2>&1 | grep -E "(ok|not ok|pass|fail|tests)"
+
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+ok 2 - a flat venue with no obstacles is never shaded
+ok 3 - a venue buried in tall obstacles is fully shaded
+ok 4 - the sun is down after dark: shadeAt is null
+# tests 4
+# pass 4
+# fail 0
+
+All 4 tests pass! Now let me remove the debug statements and keep the implementation clean:
+
+
+  ────────────────────────────────────────
+  ▸ write
+    path src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) break;
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shaded++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return n ? shaded / n : 0;
+}
+
+
+Wrote src/shade.js (62 lines)
+
+Now let me run the tests one more time to make sure everything is clean and working:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js
+
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.04675
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 1.022458
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 5.033625
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://work/weak/goose/rally-3d-shade-0/test/shade.test.js:35:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.526542
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15.760583
+
+Command exited with code 1
+
+The test fails again! This is still the module caching issue. The test runs within the same Node process context and imports the cached version. But when I run the import directly in a fresh shell, it works. Let me check what's happening with the module cache:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const { shadeAt, sunPosition } = await import('./src/shade.js');
+console.log('sunPosition imported:', typeof sunPosition);
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+console.log('shadeAt result:', shadeAt(scene, new Date('2026-06-21T20:00:00Z')));
+"
+
+
+sunPosition imported: undefined
+shadeAt result: 0
+
+The result is 0! But `sunPosition` is `undefined` - the import didn't include it. Let me check what's exported from shade.js and if sun.js is properly imported:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat src/sun.js | head -10
+
+// Sun position (the SunCalc formulas), as the 3D view uses them.
+
+const rad = Math.PI / 180;
+
+/**
+ * Compute sun position for a given date and location.
+ * @param {Date} date - The date to compute for
+ * @param {number} lat - Latitude in degrees
+ * @param {number} lng - Longitude in degrees
+ * @returns {{ alt: number, bearing: number }} - Elevation and bearing in radians
+
+That looks correct. Let me check if the actual shade.js code has sunPosition defined properly and if it's being properly censored. Wait - the earlier debug output showed `maxTop= -Infinity` for the test. That happens when all values in the iteration are <= -32768. But my scene has all values = 32767, so it should work.
+
+Unless... there's some caching going on where the test code is importing an OLD version of shade.js in some way. Let me check if there's a module cache that's persisting:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && rm -rf /tmp/v8cache; node test/shade.test.js 2>&1 | tail -10
+
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 15.893708
+
+Still fails. Let me look more carefully at the failure. One thing I notice - the test creates a scene with `top: new Array(110 * 110).fill(32767)`. But maybe something else is going on. Let me stub through the algorithm step by step in a fresh process to see what's passing and what's failing:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+// Let me examine what shade.test.js is doing
+
+const { shadeAt } = await import('./src/shade.js');
+
+// The test case
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const date = new Date('2026-06-21T20:00:00Z');
+
+// Check scene.top
+console.log('scene.top[0]:', scene.top[0]);
+console.log('32767 > -32768:', 32767 > -32768);
+
+// Check what shadeAt reports
+const result = shadeAt(scene, date);
+console.log('result:', result);
+
+// Debug maxTop calculation
+let maxTop = -Infinity;
+for (const h of scene.top) {
+  console.log('h=' + h + ' h > -32768=' + (h > -32768));
+  if (h > -32768) {
+    maxTop = Math.max(maxTop, h / 10);
+  }
+}
+console.log('maxTop from loop:', maxTop);
+"
+
+
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+h=32767 h > -32768=true
+maxTop from loop: 3276.7[Output exceeded 2000 line limit (12104 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/stdout-2. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+[Output exceeded 2000 line limit (12104 lines total). Full output saved to work/weak/goose/rally-3d-shade-0.tmp/.tmptHeZZE/output-2. Read it with shell commands like `head`, `tail`, or `sed -n '100,200p'` up to 2000 lines at a time.]
+
+OK, so the loop finds maxTop=3276.7 which is correct. But shadeAt returns 0. Let me add more debug directly in the shade.js file one more time and trace through:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import('./src/sun.js').then(({ sunPosition }) => {
+import('./src/geometry.js').then(({ fromFrame, cellOf }) => {
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+const date = new Date('2026-06-21T20:00:00Z');
+
+const s = sunPosition(date, scene.lat, scene.lng);
+console.log('sun:', s);
+
+if (s.alt <= 0) {
+  console.log('sun at/below horizon');
+  process.exit(0);
+}
+
+const ex = Math.sin(s.bearing);
+const ny = Math.cos(s.bearing);
+const rise = Math.tan(s.alt);
+
+const maxTop = scene.top[0] > -32768 ? 3276.7 : -Infinity;
+console.log('maxTop:', maxTop);
+
+console.log('simulating shadeAt algorithm...');
+process.exit(0);
+});
+});
+"
+
+
+[eval]:8
+const date = new Date('2026-06-21T20:00:00Z');
+      ^^^^
+Unexpected token `date`. Expected ... , *,  (, [, :, , ?, =, an identifier, public, protected, private, readonly, <.
+
+SyntaxError: Unexpected identifier 'date'
+    at makeContextifyScript (node:internal/vm:185:14)
+    at compileScript (node:internal/process/execution:383:10)
+    at evalTypeScript (node:internal/process/execution:256:22)
+    at node:internal/main/eval_string:74:3
+
+Node.js v22.22.1
+
+Command exited with code 1
+
+Syntax error. Let me try another approach - let me look at the test file itself more carefully:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat test/shade.test.js | head -40
+
+import test from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sunPosition } from '../src/sun.js';
+import { shadeAt } from '../src/shade.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test('sun is up at local midday and down at night (Seattle, June)', () => {
+  const noon = new Date('2026-06-21T20:00:00Z'); // ~13:00 PDT
+  const night = new Date('2026-06-21T08:00:00Z'); // ~01:00 PDT
+  const s = sunPosition(noon, 47.6, -122.3);
+  assert.ok(s.alt > 0.5, 'sun should be high at midday');
+  assert.ok(s.bearing >= 0 && s.bearing < 2 * Math.PI, 'bearing wraps to [0, 2pi)');
+  assert.ok(sunPosition(night, 47.6, -122.3).alt < 0, 'sun below horizon at night');
+});
+
+test('a flat venue with no obstacles is never shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(-32768),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 0);
+});
+
+test('a venue buried in tall obstacles is fully shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(32767),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 1);
+});
+
+test('the sun is down after dark: shadeAt is null', () => {
+  const scene = JSON.parse(readFileSync(join(here, '..', 'venues', 'kenmore-inglemoor-hs.json'), 'utf8'));
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T09:00:00Z')), null);
+
+Wait! I see things now! Look at the test dates:
+- Test 1 uses `new Date('2026-06-21T20:00:00Z')` for noon (which is ~13:00 PDT)
+- Test 3 uses `new Date('2026-06-21T20:00:00Z')`
+
+But test 4 uses `new Date('2026-06-21T09:00:00Z')` for night (which is ~01:00 PDT in Seattle).
+
+Seattle is in PT/PDT timezone (UTC-7 in summer). So `20:00:00Z` is 13:00 PDT which should have sun up, and `09:00:00Z` is 02:00 PDT which should have sun down.
+
+But wait! Looking back at my sun.js implementation - I'm NOT handling timezone/local time! The reference/sun.ts has `zonedTime` and `tzOffset` functions, but the shade trace in reference/viewer-shade.ts uses the ISO-date directly and calls `sunPosition(date, lat, lng)`.
+
+So my implementation should be compatible. Let me check if `20:00:00Z` is actually giving sun-alt > 0:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+import { sunPosition } from './src/sun.js';
+
+const noon = new Date('2026-06-21T20:00:00Z');
+const night = new Date('2026-06-21T09:00:00Z');
+
+console.log('noon (UTC):', noon.toISOString());
+console.log('noon (local):', noon.toLocaleString());
+console.log('sunPosition(noon):', sunPosition(noon, 47.6, -122.3));
+
+console.log('night (UTC):', night.toISOString());
+console.log('night (local):', night.toLocaleString());
+console.log('sunPosition(night):', sunPosition(night, 47.6, -122.3));
+"
+
+
+noon (UTC): 2026-06-21T20:00:00.000Z
+noon (local): 6/21/2026, 1:00:00 PM
+sunPosition(noon): { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+night (UTC): 2026-06-21T09:00:00.000Z
+night (local): 6/21/2026, 2:00:00 AM
+sunPosition(night): { alt: -0.3161746003900946, bearing: 0.20558291852091637 }
+
+OK so sunPosition works correctly. Now let me add debug logging directly to shade.js to understand what's happening. But this time, let me trace the actual shadeAt algorithm EXACTLY as written:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+// Manual trace of shadeAt WITHOUT any imports
+// to verify the algorithm is correct
+
+const sunPosition = async (date, lat, lng) => {
+  const rad = Math.PI / 180;
+  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
+  const M = rad * (357.5291 + 0.98560028 * d);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + rad * 102.9372 + Math.PI;
+  const e = rad * 23.4397;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
+  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
+  const phi = rad * lat;
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+};
+
+// fromFrame
+function fromFrame(f, a, b) {
+  return [
+    f.cx + Math.cos(f.theta) * a - Math.sin(f.theta) * b,
+    f.cy + Math.sin(f.theta) * a + Math.cos(f.theta) * b,
+  ];
+}
+
+// cellOf  
+function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+
+const scene = {
+  lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+  top: new Array(110 * 110).fill(32767),
+};
+
+const date = new Date('2026-06-21T20:00:00Z');
+const s = sunPosition(date, scene.lat, scene.lng);
+console.log('s:', s);
+
+if (s.alt <= 0) {
+  console.log('SUN DOWN');
+  process.exit(0);
+}
+
+const ex = Math.sin(s.bearing);
+const ny = Math.cos(s.bearing);
+const rise = Math.tan(s.alt);
+console.log('ex,ny,rise:', ex, ny, rise);
+
+let maxTop = -Infinity;
+for (const h of scene.top) {
+  if (h > -32768) { maxTop = Math.max(maxTop, h / 10); }
+}
+console.log('maxTop:', maxTop);
+
+console.log('=== Shading algorithm ===');
+let shaded = 0;
+let n = 0;
+
+for (const f of scene.courts) {
+  const h0 = f.z + 1;
+  const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+  console.log('Court h0, maxD:', h0, maxD);
+  
+  const samples = [];
+  for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+    for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+      samples.push(fromFrame(f, a, b));
+    }
+  }
+  console.log('Samples:', samples.length);
+  
+  for (const [px0, py0] of samples) {
+    n++;
+    console.log('Sample ' + n, px0, py0);
+    for (let d = 0.5; d < maxD; d += 0.5) {
+      const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
+      if (c < 0) {
+        console.log('  d=' + d + ' c=' + c + ' OUT OF GRID');
+        break;
+      }
+      const obstacleHeight = scene.top[c] / 10;
+      const threshold = h0 + d * rise;
+      if (obstacleHeight > -32768 && obstacleHeight > threshold) {
+        shaded++;
+        console.log('  SHADED at d=' + d);
+        break;
+      }
+    }
+  }
+}
+
+console.log('Results: n=' + n + ' shaded=' + shaded + ' ratio=' + (n ? shaded/n : 0));
+"
+
+
+s: Promise { { alt: 1.1472973514160205, bearing: 3.0316692789970405 } }
+ex,ny,rise: NaN NaN NaN
+maxTop: 3276.7
+=== Shading algorithm ===
+Court h0, maxD: 1 NaN
+Samples: 136
+Sample 1 -11.285 -4.985
+Sample 2 -11.285 -3.5850000000000004
+Sample 3 -11.285 -2.1850000000000005
+Sample 4 -11.285 -0.7850000000000006
+Sample 5 -11.285 0.6149999999999993
+Sample 6 -11.285 2.0149999999999992
+Sample 7 -11.285 3.414999999999999
+Sample 8 -11.285 4.8149999999999995
+Sample 9 -9.885 -4.985
+Sample 10 -9.885 -3.5850000000000004
+Sample 11 -9.885 -2.1850000000000005
+Sample 12 -9.885 -0.7850000000000006
+Sample 13 -9.885 0.6149999999999993
+Sample 14 -9.885 2.0149999999999992
+Sample 15 -9.885 3.414999999999999
+Sample 16 -9.885 4.8149999999999995
+Sample 17 -8.485 -4.985
+Sample 18 -8.485 -3.5850000000000004
+Sample 19 -8.485 -2.1850000000000005
+Sample 20 -8.485 -0.7850000000000006
+Sample 21 -8.485 0.6149999999999993
+Sample 22 -8.485 2.0149999999999992
+Sample 23 -8.485 3.414999999999999
+Sample 24 -8.485 4.8149999999999995
+Sample 25 -7.084999999999999 -4.985
+Sample 26 -7.084999999999999 -3.5850000000000004
+Sample 27 -7.084999999999999 -2.1850000000000005
+Sample 28 -7.084999999999999 -0.7850000000000006
+Sample 29 -7.084999999999999 0.6149999999999993
+Sample 30 -7.084999999999999 2.0149999999999992
+Sample 31 -7.084999999999999 3.414999999999999
+Sample 32 -7.084999999999999 4.8149999999999995
+Sample 33 -5.684999999999999 -4.985
+Sample 34 -5.684999999999999 -3.5850000000000004
+Sample 35 -5.684999999999999 -2.1850000000000005
+Sample 36 -5.684999999999999 -0.7850000000000006
+Sample 37 -5.684999999999999 0.6149999999999993
+Sample 38 -5.684999999999999 2.0149999999999992
+Sample 39 -5.684999999999999 3.414999999999999
+Sample 40 -5.684999999999999 4.8149999999999995
+Sample 41 -4.284999999999998 -4.985
+Sample 42 -4.284999999999998 -3.5850000000000004
+Sample 43 -4.284999999999998 -2.1850000000000005
+Sample 44 -4.284999999999998 -0.7850000000000006
+Sample 45 -4.284999999999998 0.6149999999999993
+Sample 46 -4.284999999999998 2.0149999999999992
+Sample 47 -4.284999999999998 3.414999999999999
+Sample 48 -4.284999999999998 4.8149999999999995
+Sample 49 -2.8849999999999985 -4.985
+Sample 50 -2.8849999999999985 -3.5850000000000004
+Sample 51 -2.8849999999999985 -2.1850000000000005
+Sample 52 -2.8849999999999985 -0.7850000000000006
+Sample 53 -2.8849999999999985 0.6149999999999993
+Sample 54 -2.8849999999999985 2.0149999999999992
+Sample 55 -2.8849999999999985 3.414999999999999
+Sample 56 -2.8849999999999985 4.8149999999999995
+Sample 57 -1.4849999999999985 -4.985
+Sample 58 -1.4849999999999985 -3.5850000000000004
+Sample 59 -1.4849999999999985 -2.1850000000000005
+Sample 60 -1.4849999999999985 -0.7850000000000006
+Sample 61 -1.4849999999999985 0.6149999999999993
+Sample 62 -1.4849999999999985 2.0149999999999992
+Sample 63 -1.4849999999999985 3.414999999999999
+Sample 64 -1.4849999999999985 4.8149999999999995
+Sample 65 -0.08499999999999863 -4.985
+Sample 66 -0.08499999999999863 -3.5850000000000004
+Sample 67 -0.08499999999999863 -2.1850000000000005
+Sample 68 -0.08499999999999863 -0.7850000000000006
+Sample 69 -0.08499999999999863 0.6149999999999993
+Sample 70 -0.08499999999999863 2.0149999999999992
+Sample 71 -0.08499999999999863 3.414999999999999
+Sample 72 -0.08499999999999863 4.8149999999999995
+Sample 73 1.3150000000000013 -4.985
+Sample 74 1.3150000000000013 -3.5850000000000004
+Sample 75 1.3150000000000013 -2.1850000000000005
+Sample 76 1.3150000000000013 -0.7850000000000006
+Sample 77 1.3150000000000013 0.6149999999999993
+Sample 78 1.3150000000000013 2.0149999999999992
+Sample 79 1.3150000000000013 3.414999999999999
+Sample 80 1.3150000000000013 4.8149999999999995
+Sample 81 2.715000000000001 -4.985
+Sample 82 2.715000000000001 -3.5850000000000004
+Sample 83 2.715000000000001 -2.1850000000000005
+Sample 84 2.715000000000001 -0.7850000000000006
+Sample 85 2.715000000000001 0.6149999999999993
+Sample 86 2.715000000000001 2.0149999999999992
+Sample 87 2.715000000000001 3.414999999999999
+Sample 88 2.715000000000001 4.8149999999999995
+Sample 89 4.115000000000001 -4.985
+Sample 90 4.115000000000001 -3.5850000000000004
+Sample 91 4.115000000000001 -2.1850000000000005
+Sample 92 4.115000000000001 -0.7850000000000006
+Sample 93 4.115000000000001 0.6149999999999993
+Sample 94 4.115000000000001 2.0149999999999992
+Sample 95 4.115000000000001 3.414999999999999
+Sample 96 4.115000000000001 4.8149999999999995
+Sample 97 5.515000000000001 -4.985
+Sample 98 5.515000000000001 -3.5850000000000004
+Sample 99 5.515000000000001 -2.1850000000000005
+Sample 100 5.515000000000001 -0.7850000000000006
+Sample 101 5.515000000000001 0.6149999999999993
+Sample 102 5.515000000000001 2.0149999999999992
+Sample 103 5.515000000000001 3.414999999999999
+Sample 104 5.515000000000001 4.8149999999999995
+Sample 105 6.915000000000001 -4.985
+Sample 106 6.915000000000001 -3.5850000000000004
+Sample 107 6.915000000000001 -2.1850000000000005
+Sample 108 6.915000000000001 -0.7850000000000006
+Sample 109 6.915000000000001 0.6149999999999993
+Sample 110 6.915000000000001 2.0149999999999992
+Sample 111 6.915000000000001 3.414999999999999
+Sample 112 6.915000000000001 4.8149999999999995
+Sample 113 8.315000000000001 -4.985
+Sample 114 8.315000000000001 -3.5850000000000004
+Sample 115 8.315000000000001 -2.1850000000000005
+Sample 116 8.315000000000001 -0.7850000000000006
+Sample 117 8.315000000000001 0.6149999999999993
+Sample 118 8.315000000000001 2.0149999999999992
+Sample 119 8.315000000000001 3.414999999999999
+Sample 120 8.315000000000001 4.8149999999999995
+Sample 121 9.715000000000002 -4.985
+Sample 122 9.715000000000002 -3.5850000000000004
+Sample 123 9.715000000000002 -2.1850000000000005
+Sample 124 9.715000000000002 -0.7850000000000006
+Sample 125 9.715000000000002 0.6149999999999993
+Sample 126 9.715000000000002 2.0149999999999992
+Sample 127 9.715000000000002 3.414999999999999
+Sample 128 9.715000000000002 4.8149999999999995
+Sample 129 11.115000000000002 -4.985
+Sample 130 11.115000000000002 -3.5850000000000004
+Sample 131 11.115000000000002 -2.1850000000000005
+Sample 132 11.115000000000002 -0.7850000000000006
+Sample 133 11.115000000000002 0.6149999999999993
+Sample 134 11.115000000000002 2.0149999999999992
+Sample 135 11.115000000000002 3.414999999999999
+Sample 136 11.115000000000002 4.8149999999999995
+Results: n=136 shaded=0 ratio=0
+
+I see the problem! The `sunPosition` returned a Promise, not the result. The algorithm ran with `s` as a Promise object, and `Math.sin(Promise)` returns `NaN`. The issue is that I'm using async/await incorrectly in the inline test.
+
+But this shouldn't be an issue with the actual imports! Let me check if there's a problem with how import works:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node --input-type=module -e "
+import { sunPosition } from './src/sun.js';
+const result = sunPosition(new Date('2026-06-21T20:00:00Z'), 47.6, -122.3);
+console.log('typeof result:', typeof result);
+console.log('result:', result);
+"
+
+
+typeof result: object
+result: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+
+OK, so the import works correctly! The result is an object with alt and bearing. So why does the test fail?
+
+Wait... I think the issue is that Node.js caches ESM modules. When I ran the first test, a version of shade.js was cached. But when I edited shade.js and ran again, the test might still use the old cached version.
+
+Actually that doesn't make sense either - the test failed, which means the cached version is what's being used. But when I manually imported in a fresh shell, it worked.
+
+Let me check Node.js module caching behavior:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && ls -la .v8-cache 2>/dev/null || echo "no v8-cache directory"; find . -name "*.mjs" -newer /dev/zero 2>/dev/null | head -5; echo "---"; node -v
+
+no v8-cache directory
+---
+v22.22.1
+
+No v8-cache directory. The module caching in ESM is more subtle. The issue might be that the test first imports shade.js which imports sun.js in the SAME process. Then sun.js returns the correct result, but something in shade.js is wrong.
+
+Wait - let me check if the module caching is even the issue. The test failed with `alt=1.147...` from the earlier debug, so sun.js returns the right result. But shadeAt returns 0. Let me check the imports more carefully:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 > /dev/null 2>&1 && bash -c 'node test/shade.test.js' | head -20
+
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.101708
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 1.215209
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 5.240583
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+node:events:497
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:572:12)
+    at _write (node:internal/streams/writable:501:10)
+    at Writable.write (node:internal/streams/writable:510:10)
+    at Duplex.ondata (node:internal/streams/readable:1009:22)
+    at Duplex.emit (node:events:519:28)
+    at addChunk (node:internal/streams/readable:561:12)
+Emitted 'error' event on Socket instance at:
+    at Socket.onerror (node:internal/streams/readable:1028:14)
+    at Socket.emit (node:events:519:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  errno: -32,
+  code: 'EPIPE',
+  syscall: 'write'
+}
+
+Node.js v22.22.1
+
+EPIPE error from head. Let me just run the test and examine its output:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat src/shade.js
+
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) break;
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shaded++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return n ? shaded / n : 0;
+}
+
+Looks correct. Let me trace through manually by mimicking exactly what's in the shade.test.js file:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 > /dev/null 2>&1 && bash -c 'node --test test/shade.test.js 2>&1 | grep -A5 "buried"'
+
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 5.045792
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+
+Let me add temporary debug logging inside shadeAt to see what's actually happening:
+
+
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before: export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    after: export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('[shadeAt] sun.alt=' + s.alt + ' bearing=' + s.bearing);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('[shadeAt] ex=' + ex + ' ny=' + ny + ' rise=' + rise);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  console.log('[shadeAt] maxTop=' + maxTop + ' scene.top[0]=' + scene.top[0]);
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    console.log('[shadeAt] court maxD=' + maxD);
+
+Edited src/shade.js (27 lines -> 31 lines)
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before:     
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) break;
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shaded++;
+          break;
+        }
+      }
+    }
+    after:     
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    console.log('[shadeAt] samples count=' + samples.length);
+    
+    for (const [px0, py0] of samples) {
+      n++;
+      console.log('[shadeAt] sample ' + n + ': (' + px0 + ', ' + py0 + ')');
+      let shadedLoop = false;
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+        if (c < 0) {
+          console.log('[shadeAt]   d=' + d + ' c=' + c + ' out of bound, break');
+          break;
+        }
+        // top is in decimetres, divided by 10 for metres
+        const obstacleHeight = scene.top[c] / 10;
+        const thresh = h0 + d * rise;
+        console.log('[shadeAt]   d=' + d + ' c=' + c + ' h=' + obstacleHeight + ' t=' + thresh + ' shaded?' + (obstacleHeight > thresh));
+        if (obstacleHeight > -32768 && obstacleHeight > h0 + d * rise) {
+          shadedLoop = true;
+          shaded++;
+          break;
+        }
+      }
+      if (!shadedLoop) console.log('[shadeAt]   NOT SHADED');
+    }
+
+Edited src/shade.js (22 lines -> 32 lines)
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before:   return n ? shaded / n : 0;
+}
+    after:   console.log('[shadeAt] final: n=' + n + ' shaded=' + shaded + ' ratio=' + (n ? shaded / n : 0));
+  return n ? shaded / n : 0;
+}
+
+Edited src/shade.js (2 lines -> 3 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -E "^\[(shadeAt|sun)\]" | head -30
+
+[shadeAt] sun.alt=1.1472973514160205 bearing=3.0316692789970405
+[shadeAt] ex=0.10970213822417842 ny=-0.9939645068457139 rise=2.218397226982552
+[shadeAt] maxTop=-Infinity scene.top[0]=-32768
+[shadeAt] court maxD=-Infinity
+[shadeAt] samples count=136
+[shadeAt] sample 1: (-11.285, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 2: (-11.285, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 3: (-11.285, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 4: (-11.285, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 5: (-11.285, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 6: (-11.285, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 7: (-11.285, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 8: (-11.285, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 9: (-9.885, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 10: (-9.885, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 11: (-9.885, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 12: (-9.885, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 13: (-9.885, 0.6149999999999993)
+
+FOUND IT! `maxTop=-Infinity scene.top[0]=-32768`! 
+
+The test "a venue buried in tall obstacles" is NOT getting the scene with `top: new Array(110 * 110).fill(32767)`! It's getting a scene with `top[0] = -32768` (empty/none). 
+
+This means the tests are reading from DIFFERENT scene files than what I was testing! Let me check which test is running:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -E "^\[(shadeAt|sun)\]" | grep -E "(maxTop|buried)"
+
+[shadeAt] maxTop=-Infinity scene.top[0]=-32768
+[shadeAt] maxTop=3276.7 scene.top[0]=32767
+
+Hmm, two different calls - one with maxTop=-Infinity (flat venue test) and one with maxTop=3276.7 (buried test). But they're reversed from the test file order! The test file creates flat venue FIRST, then buried test. But the output shows the buried test (+3276.7) AFTER the flat test (-32768). 
+
+Wait, but wait - the test file creates separate scenes for tests 2 and 3. Tests 1 and 4 use a different scene (from kenmore-inglemoor-hs.json). 
+
+Let me check what scene is being used for test 3:
+
+Actually re-reading the output, it seems like:
+1. `sun.alt=1.147...` appears in test 1 (uses lat,lng 47.6,-122.3)
+2. Then flat venue test (maxTop=-Infinity, which means all -32768)
+3. Then buried test (maxTop=3276.7, top[0]=32767)
+
+But the test output preview shows maxTop=-Infinity BEFORE maxTop=3276.7. That's the order tests run. So test 1 is running (which uses sunPosition with lat,lng), test 2 is running (flat venue with all -32768), test 3 is running (buried with all 32767).
+
+But the grep output shows `[shadeAt]` lines for BOTH tests. So something's odd. Let me just look at the full test 3 output:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -B5 -A15 "buried"
+
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 2.772833
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 65.896041
+  type: 'test'
+  location: 'work/weak/goose/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+
+The output shows test 2 passed (flat venue with 0), test 3 failed (buried venue expected 1, got 0). Let me check the debug output for test 3 by filtering the lines (since we have 2000 line limit):
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | head -50
+
+[shadeAt]   d=143.5 c=NaN h=NaN t=319.3400020719962 shaded?false
+[shadeAt]   d=144 c=NaN h=NaN t=320.4492006854875 shaded?false
+[shadeAt]   d=144.5 c=NaN h=NaN t=321.5583992989787 shaded?false
+[shadeAt]   d=145 c=NaN h=NaN t=322.66759791247 shaded?false
+[shadeAt]   d=145.5 c=NaN h=NaN t=323.7767965259613 shaded?false
+[shadeAt]   d=146 c=NaN h=NaN t=324.8859951394526 shaded?false
+[shadeAt]   d=146.5 c=NaN h=NaN t=325.99519375294386 shaded?false
+[shadeAt]   d=147 c=NaN h=NaN t=327.1043923664351 shaded?false
+[shadeAt]   d=147.5 c=NaN h=NaN t=328.2135909799264 shaded?false
+[shadeAt]   d=148 c=NaN h=NaN t=329.32278959341767 shaded?false
+[shadeAt]   d=148.5 c=NaN h=NaN t=330.43198820690895 shaded?false
+[shadeAt]   d=149 c=NaN h=NaN t=331.54118682040024 shaded?false
+[shadeAt]   d=149.5 c=NaN h=NaN t=332.6503854338915 shaded?false
+[shadeAt]   d=150 c=NaN h=NaN t=333.75958404738276 shaded?false
+[shadeAt]   d=150.5 c=NaN h=NaN t=334.86878266087405 shaded?false
+[shadeAt]   d=151 c=NaN h=NaN t=335.97798127436533 shaded?false
+[shadeAt]   d=151.5 c=NaN h=NaN t=337.0871798878566 shaded?false
+[shadeAt]   d=152 c=NaN h=NaN t=338.19637850134785 shaded?false
+[shadeAt]   d=152.5 c=NaN h=NaN t=339.30557711483914 shaded?false
+[shadeAt]   d=153 c=NaN h=NaN t=340.4147757283304 shaded?false
+[shadeAt]   d=153.5 c=NaN h=NaN t=341.5239743418217 shaded?false
+[shadeAt]   d=154 c=NaN h=NaN t=342.633172955313 shaded?false
+[shadeAt]   d=154.5 c=NaN h=NaN t=343.74237156880423 shaded?false
+[shadeAt]   d=155 c=NaN h=NaN t=344.8515701822955 shaded?false
+[shadeAt]   d=155.5 c=NaN h=NaN t=345.9607687957868 shaded?false
+[shadeAt]   d=156 c=NaN h=NaN t=347.0699674092781 shaded?false
+[shadeAt]   d=156.5 c=NaN h=NaN t=348.1791660227694 shaded?false
+[shadeAt]   d=157 c=NaN h=NaN t=349.2883646362606 shaded?false
+[shadeAt]   d=157.5 c=NaN h=NaN t=350.3975632497519 shaded?false
+[shadeAt]   d=158 c=NaN h=NaN t=351.5067618632432 shaded?false
+[shadeAt]   d=158.5 c=NaN h=NaN t=352.6159604767345 shaded?false
+[shadeAt]   d=159 c=NaN h=NaN t=353.72515909022576 shaded?false
+[shadeAt]   d=159.5 c=NaN h=NaN t=354.834357703717 shaded?false
+[shadeAt]   d=160 c=NaN h=NaN t=355.9435563172083 shaded?false
+[shadeAt]   d=160.5 c=NaN h=NaN t=357.05275493069956 shaded?false
+[shadeAt]   d=161 c=NaN h=NaN t=358.16195354419085 shaded?false
+[shadeAt]   d=161.5 c=NaN h=NaN t=359.27115215768214 shaded?false
+[shadeAt]   d=162 c=NaN h=NaN t=360.38035077117337 shaded?false
+[shadeAt]   d=162.5 c=NaN h=NaN t=361.48954938466466 shaded?false
+[shadeAt]   d=163 c=NaN h=NaN t=362.59874799815594 shaded?false
+[shadeAt]   d=163.5 c=NaN h=NaN t=363.70794661164723 shaded?false
+[shadeAt]   d=164 c=NaN h=NaN t=364.8171452251385 shaded?false
+[shadeAt]   d=164.5 c=NaN h=NaN t=365.92634383862975 shaded?false
+[shadeAt]   NOT SHADED
+[shadeAt] final: n=136 shaded=0 ratio=0
+[shadeAt] sun.alt=-0.31353687995504853 bearing=0.20672078939943983
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+
+`c=NaN`! This is the same issue I had before. Let me find where the test that produces NaN starts:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -B20 "c=NaN" | grep -E "^\[(shadeAt|sun)\]" | head -20
+
+[shadeAt]   NOT SHADED
+[shadeAt] sample 131: (11.115000000000002, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 132: (11.115000000000002, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 133: (11.115000000000002, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 134: (11.115000000000002, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 135: (11.115000000000002, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 136: (11.115000000000002, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] final: n=136 shaded=0 ratio=0
+[shadeAt] sun.alt=1.1472973514160205 bearing=3.0316692789970405
+[shadeAt] ex=0.10970213822417842 ny=-0.9939645068457139 rise=2.218397226982552
+[shadeAt] maxTop=3276.7 scene.top[0]=32767
+[shadeAt] court maxD=165
+[shadeAt] samples count=136
+[shadeAt] sample 1: (-11.285, -4.985)
+
+`sun.alt=1.147...` - this is with `maxTop=3276.7 scene.top[0]=32767`, which is CORRECT for the "buried" test! So this is test 3. But then c becomes NaN.
+
+Wait, I just saw `c=NaN` after some earlier test. And the earlier test had `scene.top[0]=-32768`. The c=NaN is coming from somewhere where scene.radius is NaN.
+
+OH! I think I understand now! The tests share the SAME scene object when running the "buried test". But wait, test 2 creates its own scene. Test 3 creates its own scene. Test 4 reads a JSON file.
+
+Unless... let me check the test file to see if there's something shared:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat test/shade.test.js
+
+import test from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sunPosition } from '../src/sun.js';
+import { shadeAt } from '../src/shade.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test('sun is up at local midday and down at night (Seattle, June)', () => {
+  const noon = new Date('2026-06-21T20:00:00Z'); // ~13:00 PDT
+  const night = new Date('2026-06-21T08:00:00Z'); // ~01:00 PDT
+  const s = sunPosition(noon, 47.6, -122.3);
+  assert.ok(s.alt > 0.5, 'sun should be high at midday');
+  assert.ok(s.bearing >= 0 && s.bearing < 2 * Math.PI, 'bearing wraps to [0, 2pi)');
+  assert.ok(sunPosition(night, 47.6, -122.3).alt < 0, 'sun below horizon at night');
+});
+
+test('a flat venue with no obstacles is never shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(-32768),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 0);
+});
+
+test('a venue buried in tall obstacles is fully shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(32767),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 1);
+});
+
+test('the sun is down after dark: shadeAt is null', () => {
+  const scene = JSON.parse(readFileSync(join(here, '..', 'venues', 'kenmore-inglemoor-hs.json'), 'utf8'));
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T09:00:00Z')), null);
+});
+
+OK, test 3 creates a NEW scene each time. So there's no shared state. But when the test runs, it passes `scene` to `shadeAt`, but something inside shadeAt is modifying `scene` (like cellOf or something touching scene.top). Wait, cellOf doesn't modify scene.
+
+Let me see where `c=NaN` is coming from. It's in the iteration where `maxTop=3276.7`. So it's test 3. Let me look at the full debug more carefully:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -B50 "c=NaN" | grep -E "^\[(shadeAt|sun)\]" | tail -20
+
+[shadeAt]   d=155 c=NaN h=NaN t=344.8515701822955 shaded?false
+[shadeAt]   d=155.5 c=NaN h=NaN t=345.9607687957868 shaded?false
+[shadeAt]   d=156 c=NaN h=NaN t=347.0699674092781 shaded?false
+[shadeAt]   d=156.5 c=NaN h=NaN t=348.1791660227694 shaded?false
+[shadeAt]   d=157 c=NaN h=NaN t=349.2883646362606 shaded?false
+[shadeAt]   d=157.5 c=NaN h=NaN t=350.3975632497519 shaded?false
+[shadeAt]   d=158 c=NaN h=NaN t=351.5067618632432 shaded?false
+[shadeAt]   d=158.5 c=NaN h=NaN t=352.6159604767345 shaded?false
+[shadeAt]   d=159 c=NaN h=NaN t=353.72515909022576 shaded?false
+[shadeAt]   d=159.5 c=NaN h=NaN t=354.834357703717 shaded?false
+[shadeAt]   d=160 c=NaN h=NaN t=355.9435563172083 shaded?false
+[shadeAt]   d=160.5 c=NaN h=NaN t=357.05275493069956 shaded?false
+[shadeAt]   d=161 c=NaN h=NaN t=358.16195354419085 shaded?false
+[shadeAt]   d=161.5 c=NaN h=NaN t=359.27115215768214 shaded?false
+[shadeAt]   d=162 c=NaN h=NaN t=360.38035077117337 shaded?false
+[shadeAt]   d=162.5 c=NaN h=NaN t=361.48954938466466 shaded?false
+[shadeAt]   d=163 c=NaN h=NaN t=362.59874799815594 shaded?false
+[shadeAt]   d=163.5 c=NaN h=NaN t=363.70794661164723 shaded?false
+[shadeAt]   d=164 c=NaN h=NaN t=364.8171452251385 shaded?false
+[shadeAt]   d=164.5 c=NaN h=NaN t=365.92634383862975 shaded?false
+
+So c=NaN and h=NaN. These are coming from `scene.top[c]`. If c is NaN, then `scene.top[c]` returns NaN. This means `cellOf` is returning NaN. But earlier I tested cellOf and it returned -1 when out of bounds.
+
+Wait - when cellOf returns -1, the code does `if (c < 0) break;`. So why are we continuing with c=NaN?
+
+That tells me the loop is NOT checking `if (c < 0)` OR `c` is changing between iterations. But we can't have another loop - shadeAt iterates over samples separately.
+
+UNLESS... there's something wrong with the loop iteration. `for (let d = 0.5; d < maxD; d += 0.5)` is using a single loop for all samples. But we loop over samples first... OH WAIT! I just realized something!
+
+Look at my code:
+```javascript
+for (const [px0, py0] of samples) {
+  n++;
+```
+
+We're iterating overamples. But in the debug output, sample 1 goes through d=143.5... and so on. The samples are ONLY iterating on one sample point - sample 1! But we have 136 samples!
+
+Wait no wait... Let me look at the structure more carefully. Actually I see the pattern - samples iterate, then for EACH sample there's a loop over d. We should see all 136 samples go through their d loop.
+
+Let me look BEFORE the c=NaN section:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -B80 "c=NaN" | grep -E "sample 13" 
+
+[shadeAt] sample 130: (11.115000000000002, -3.5850000000000004)
+[shadeAt] sample 131: (11.115000000000002, -2.1850000000000005)
+[shadeAt] sample 132: (11.115000000000002, -0.7850000000000006)
+[shadeAt] sample 133: (11.115000000000002, 0.6149999999999993)
+[shadeAt] sample 134: (11.115000000000002, 2.0149999999999992)
+[shadeAt] sample 135: (11.115000000000002, 3.414999999999999)
+[shadeAt] sample 136: (11.115000000000002, 4.8149999999999995)
+[shadeAt] sample 13: (-9.885, 0.6149999999999993)
+[shadeAt] sample 130: (11.115000000000002, -3.5850000000000004)
+[shadeAt] sample 131: (11.115000000000002, -2.1850000000000005)
+[shadeAt] sample 132: (11.115000000000002, -0.7850000000000006)
+[shadeAt] sample 133: (11.115000000000002, 0.6149999999999993)
+[shadeAt] sample 134: (11.115000000000002, 2.0149999999999992)
+[shadeAt] sample 135: (11.115000000000002, 3.414999999999999)
+[shadeAt] sample 136: (11.115000000000002, 4.8149999999999995)
+
+I see sample 13 followed by sample 130-136. So it's looping correctly through multiple samples. But wait - I only see sample prints, not the inner "NOT SHADED" messages for samples 131-136. And no c=NaN preceeding sample 131.
+
+Oh wait! The debug is truncated. The c=NaN happens AFTER sample 136. So it's AFTER the loop over samples completes. Then we see `final: n=136 shaded=0 ratio=0` followed by `sun.alt=1.147...` which is test 2!
+
+So actually the first part (with c=NaN) is still from test 3. But then what's happening with `sun.alt=1.147...` followed by `maxTop=3276.7` - that's test 3 CORRECT! Then where's the c=NaN debug?
+
+Let me get more context by grabbing where the loops actually break:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -B100 "c=NaN" | grep -E "(sample|break|final|event)" | head -30
+
+[shadeAt] sample 91: (4.115000000000001, -2.1850000000000005)
+[shadeAt] sample 92: (4.115000000000001, -0.7850000000000006)
+[shadeAt] sample 93: (4.115000000000001, 0.6149999999999993)
+[shadeAt] sample 94: (4.115000000000001, 2.0149999999999992)
+[shadeAt] sample 95: (4.115000000000001, 3.414999999999999)
+[shadeAt] sample 96: (4.115000000000001, 4.8149999999999995)
+[shadeAt] sample 97: (5.515000000000001, -4.985)
+[shadeAt] sample 98: (5.515000000000001, -3.5850000000000004)
+[shadeAt] sample 99: (5.515000000000001, -2.1850000000000005)
+[shadeAt] sample 100: (5.515000000000001, -0.7850000000000006)
+[shadeAt] sample 101: (5.515000000000001, 0.6149999999999993)
+[shadeAt] sample 102: (5.515000000000001, 2.0149999999999992)
+[shadeAt] sample 103: (5.515000000000001, 3.414999999999999)
+[shadeAt] sample 104: (5.515000000000001, 4.8149999999999995)
+[shadeAt] sample 105: (6.915000000000001, -4.985)
+[shadeAt] sample 106: (6.915000000000001, -3.5850000000000004)
+[shadeAt] sample 107: (6.915000000000001, -2.1850000000000005)
+[shadeAt] sample 108: (6.915000000000001, -0.7850000000000006)
+[shadeAt] sample 109: (6.915000000000001, 0.6149999999999993)
+[shadeAt] sample 110: (6.915000000000001, 2.0149999999999992)
+[shadeAt] sample 111: (6.915000000000001, 3.414999999999999)
+[shadeAt] sample 112: (6.915000000000001, 4.8149999999999995)
+[shadeAt] sample 113: (8.315000000000001, -4.985)
+[shadeAt] sample 114: (8.315000000000001, -3.5850000000000004)
+[shadeAt] sample 115: (8.315000000000001, -2.1850000000000005)
+[shadeAt] sample 116: (8.315000000000001, -0.7850000000000006)
+[shadeAt] sample 117: (8.315000000000001, 0.6149999999999993)
+[shadeAt] sample 118: (8.315000000000001, 2.0149999999999992)
+[shadeAt] sample 119: (8.315000000000001, 3.414999999999999)
+[shadeAt] sample 120: (8.315000000000001, 4.8149999999999995)
+
+Still no break or final. Let me get much earlier in the output:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | grep -B50 "c=NaN" | head -30
+
+[shadeAt]   d=143.5 c=NaN h=NaN t=319.3400020719962 shaded?false
+[shadeAt]   d=144 c=NaN h=NaN t=320.4492006854875 shaded?false
+[shadeAt]   d=144.5 c=NaN h=NaN t=321.5583992989787 shaded?false
+[shadeAt]   d=145 c=NaN h=NaN t=322.66759791247 shaded?false
+[shadeAt]   d=145.5 c=NaN h=NaN t=323.7767965259613 shaded?false
+[shadeAt]   d=146 c=NaN h=NaN t=324.8859951394526 shaded?false
+[shadeAt]   d=146.5 c=NaN h=NaN t=325.99519375294386 shaded?false
+[shadeAt]   d=147 c=NaN h=NaN t=327.1043923664351 shaded?false
+[shadeAt]   d=147.5 c=NaN h=NaN t=328.2135909799264 shaded?false
+[shadeAt]   d=148 c=NaN h=NaN t=329.32278959341767 shaded?false
+[shadeAt]   d=148.5 c=NaN h=NaN t=330.43198820690895 shaded?false
+[shadeAt]   d=149 c=NaN h=NaN t=331.54118682040024 shaded?false
+[shadeAt]   d=149.5 c=NaN h=NaN t=332.6503854338915 shaded?false
+[shadeAt]   d=150 c=NaN h=NaN t=333.75958404738276 shaded?false
+[shadeAt]   d=150.5 c=NaN h=NaN t=334.86878266087405 shaded?false
+[shadeAt]   d=151 c=NaN h=NaN t=335.97798127436533 shaded?false
+[shadeAt]   d=151.5 c=NaN h=NaN t=337.0871798878566 shaded?false
+[shadeAt]   d=152 c=NaN h=NaN t=338.19637850134785 shaded?false
+[shadeAt]   d=152.5 c=NaN h=NaN t=339.30557711483914 shaded?false
+[shadeAt]   d=153 c=NaN h=NaN t=340.4147757283304 shaded?false
+[shadeAt]   d=153.5 c=NaN h=NaN t=341.5239743418217 shaded?false
+[shadeAt]   d=154 c=NaN h=NaN t=342.633172955313 shaded?false
+[shadeAt]   d=154.5 c=NaN h=NaN t=343.74237156880423 shaded?false
+[shadeAt]   d=155 c=NaN h=NaN t=344.8515701822955 shaded?false
+[shadeAt]   d=155.5 c=NaN h=NaN t=345.9607687957868 shaded?false
+[shadeAt]   d=156 c=NaN h=NaN t=347.0699674092781 shaded?false
+[shadeAt]   d=156.5 c=NaN h=NaN t=348.1791660227694 shaded?false
+[shadeAt]   d=157 c=NaN h=NaN t=349.2883646362606 shaded?false
+[shadeAt]   d=157.5 c=NaN h=NaN t=350.3975632497519 shaded?false
+[shadeAt]   d=158 c=NaN h=NaN t=351.5067618632432 shaded?false
+
+Still no "sample" or "break" near the c=NaN. This is strange - it should either break (c<0) or we should see samples iterating. Let me try to see which specific sample iteration leads to c=NaN:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | grep -B100 "c=NaN" | grep "sample " | tail -10
+
+(no output)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | sed -n '1,40p'
+
+[shadeAt]   d=143.5 c=NaN h=NaN t=319.3400020719962 shaded?false
+[shadeAt]   d=144 c=NaN h=NaN t=320.4492006854875 shaded?false
+[shadeAt]   d=144.5 c=NaN h=NaN t=321.5583992989787 shaded?false
+[shadeAt]   d=145 c=NaN h=NaN t=322.66759791247 shaded?false
+[shadeAt]   d=145.5 c=NaN h=NaN t=323.7767965259613 shaded?false
+[shadeAt]   d=146 c=NaN h=NaN t=324.8859951394526 shaded?false
+[shadeAt]   d=146.5 c=NaN h=NaN t=325.99519375294386 shaded?false
+[shadeAt]   d=147 c=NaN h=NaN t=327.1043923664351 shaded?false
+[shadeAt]   d=147.5 c=NaN h=NaN t=328.2135909799264 shaded?false
+[shadeAt]   d=148 c=NaN h=NaN t=329.32278959341767 shaded?false
+[shadeAt]   d=148.5 c=NaN h=NaN t=330.43198820690895 shaded?false
+[shadeAt]   d=149 c=NaN h=NaN t=331.54118682040024 shaded?false
+[shadeAt]   d=149.5 c=NaN h=NaN t=332.6503854338915 shaded?false
+[shadeAt]   d=150 c=NaN h=NaN t=333.75958404738276 shaded?false
+[shadeAt]   d=150.5 c=NaN h=NaN t=334.86878266087405 shaded?false
+[shadeAt]   d=151 c=NaN h=NaN t=335.97798127436533 shaded?false
+[shadeAt]   d=151.5 c=NaN h=NaN t=337.0871798878566 shaded?false
+[shadeAt]   d=152 c=NaN h=NaN t=338.19637850134785 shaded?false
+[shadeAt]   d=152.5 c=NaN h=NaN t=339.30557711483914 shaded?false
+[shadeAt]   d=153 c=NaN h=NaN t=340.4147757283304 shaded?false
+[shadeAt]   d=153.5 c=NaN h=NaN t=341.5239743418217 shaded?false
+[shadeAt]   d=154 c=NaN h=NaN t=342.633172955313 shaded?false
+[shadeAt]   d=154.5 c=NaN h=NaN t=343.74237156880423 shaded?false
+[shadeAt]   d=155 c=NaN h=NaN t=344.8515701822955 shaded?false
+[shadeAt]   d=155.5 c=NaN h=NaN t=345.9607687957868 shaded?false
+[shadeAt]   d=156 c=NaN h=NaN t=347.0699674092781 shaded?false
+[shadeAt]   d=156.5 c=NaN h=NaN t=348.1791660227694 shaded?false
+[shadeAt]   d=157 c=NaN h=NaN t=349.2883646362606 shaded?false
+[shadeAt]   d=157.5 c=NaN h=NaN t=350.3975632497519 shaded?false
+[shadeAt]   d=158 c=NaN h=NaN t=351.5067618632432 shaded?false
+[shadeAt]   d=158.5 c=NaN h=NaN t=352.6159604767345 shaded?false
+[shadeAt]   d=159 c=NaN h=NaN t=353.72515909022576 shaded?false
+[shadeAt]   d=159.5 c=NaN h=NaN t=354.834357703717 shaded?false
+[shadeAt]   d=160 c=NaN h=NaN t=355.9435563172083 shaded?false
+[shadeAt]   d=160.5 c=NaN h=NaN t=357.05275493069956 shaded?false
+[shadeAt]   d=161 c=NaN h=NaN t=358.16195354419085 shaded?false
+[shadeAt]   d=161.5 c=NaN h=NaN t=359.27115215768214 shaded?false
+[shadeAt]   d=162 c=NaN h=NaN t=360.38035077117337 shaded?false
+[shadeAt]   d=162.5 c=NaN h=NaN t=361.48954938466466 shaded?false
+[shadeAt]   d=163 c=NaN h=NaN t=362.59874799815594 shaded?false
+
+The very first line is `d=143.5 c=NaN`. This is at the START of the tail output (line 1 of tail -100). So the NaN output starts DURING the d loop, BEFORE the break happens.
+
+Wait - I think I understand! The `if (c < 0)` check is AFTER the cellOf() call but BEFORE the logging. So:
+1. `const c = cellOf(...)` → returns -1
+2. `if (c < 0) break;` → breaks... BUT!
+3. Wait, NO! It should break BEFORE logging.
+
+Oh... but by the time we see `c=NaN`, that's AFTER `c` has already been set. Unless cellOf itself sometimes returns NaN. Let me check cellOf directly with the exact values from the error:
+
+At d=143.5, we have `px = 4.115...` and `py = -150.6...` (based on earlier debug where sample 113-116 were around that area). Let me compute what cellOf should return:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+const cellOf = (scene, x, y) => {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+};
+
+const scene = { radius: 110, cell: 2, g: 110 };
+
+// Test various points
+console.log('Testing points around where c=NaN happens:');
+for (let d = 142; d <= 165; d += 0.5) {
+  const px = 4.115000000000001 + (d - 142) * 0.10970213822417842;
+  const py = -4.985 + (d - 142) * -0.9939645068457139;
+  const c = cellOf(scene, px, py);
+  if (c === NaN || c === 'NaN') {
+    console.log('  d=' + d + ' px=' + px + ' py=' + py + ' c=' + c);
+    console.log('  i=' + Math.floor((x + scene.radius) / scene.cell));
+    console.log('  j=' + Math.floor((scene.radius - y) / scene.cell));
+    console.log('  i<0=' + (i < 0) + ' >= scene.g=' + (i >= scene.g) + ' j<0=' + (j < 0) + ' >= scene.g=' + (j >= scene.g));
+  }
+}
+"
+
+
+Testing points around where c=NaN happens:
+
+No output - all points are returning -1 (or at least no NaN). So cellOf should return -1 correctly. But we're seeing c=NaN which means cellOf returned NaN, which means something about the scene passed to it has NaN in it.
+
+`scene.radius` must be NaN! Because if `scene.radius` is NaN, then `(x + scene.radius)` is NaN, and `floor(NaN)` is NaN!
+
+When I run the standalone test, it works. When the test runs, scene.radius becomes NaN. This must be because...oh! A shared mutation bug! 
+
+Let me check: is scene being mutated somewhere?细胞... Let me check what happens when I pass the same scene reference to multiple shade calls...
+
+Wait, test 1/2/3 don't share scenes. Test 4 does read from a JSON file. But test 3 (buried) creates a new scene.
+
+ Unless... OH! I think I know! Look at this sequence in the grep output - the NaN comes AFTER all the "sample 113-136" entries. That means IT SHOWS DURING THE 3RD TEST! BUT THEN THE OUTPUT CONTINUES WITH:
+
+```
+[shadeAt] sun.alt=1.1472973514160205 bearing=3.0316692789970405
+[shadeAt] maxTop=3276.7 scene.top[0]=32767
+```
+
+This suggests the test sequence BADGES THE SCENE, THEN RUNS THE NEXT TEST with is CORRECT! So it:
+1. Runs test 2 with flat (all -32768) → scene gets trashed somehow → NaN appears
+2. Runs test 3 with tall obstacles (all 32767) → but wait, how could NaN appear in test 3 if it has correct scene values...
+
+Actually no, I'm confused. Let me re-read more carefully. The TAIL output shows:
+- d=143.5 c=NaN... through d=164.5 c=NaN
+- Right after: `final: n=136 shaded=0 ratio=0`
+- Right after: `sun.alt=1.147...`
+- Right after: `[shadeAt] maxTop=3276.7 scene.top[0]=32767`
+
+So test 3 (which has maxTop=3276.7) ends with `n=136 shaded=0`. This should have ratio=1! Something is VERY wrong with test 3.
+
+OH! I think I see it! Look at the flow:
+1. `sun.alt=1.147...` - this is test 3 starting
+2. `[shadeAt] maxTop=3276.7 scene.top[0]=32767` - test 3 is correct
+3. But then later, `c=NaN` means cellOf returned NaN... means scene.radius became NaN!
+
+The only way this can happen if the mutable STATE of scene is getting corrupted. But we're creating new scenes for test 2 and test 3...
+
+UNLESS... module caching! When shade.js imports sun.js and gets the module object, and shade.js has some mutation that happens in sun.js or vice versa...
+
+Actually wait. Let me check if sun.js or geometry.js is being mutated:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node -e "
+console.log('Checking if any imports mutate the scene...');
+const { sunPosition } = await import('./src/sun.js');
+const { fromFrame, cellOf } = await import('./src/geometry.js');
+
+// Test the exports
+console.log('sunPosition:', typeof sunPosition);
+console.log('fromFrame:', typeof fromFrame);
+console.log('cellOf:', typeof cellOf);
+
+// Test cellOf with a simple scene
+const scene = { radius: 110, cell: 2, g: 110 };
+console.log('cellOf(100, 100):', cellOf(scene, 100, 100));
+console.log('scene after test:', scene);
+"
+
+
+Checking if any imports mutate the scene...
+sunPosition: function
+fromFrame: function
+cellOf: function
+cellOf(100, 100): 655
+scene after test: { radius: 110, cell: 2, g: 110 }
+
+Imports work fine. No mutation. Let me check geometry.js since that's where cellOf lives:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && cat src/geometry.js
+
+// Given helpers: court frame -> world, and obstacle-grid cell lookup.
+
+export const deg = Math.PI / 180;
+
+/** Court-local (a along the length, b across) -> world [x, y]. */
+export function fromFrame(f, a, b) {
+  return [
+    f.cx + Math.cos(f.theta) * a - Math.sin(f.theta) * b,
+    f.cy + Math.sin(f.theta) * a + Math.cos(f.theta) * b,
+  ];
+}
+
+/** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+
+Geometry.js looks clean. cellOf just uses basic math. The issue must be that scene.radius is somehow getting corrupted...
+
+Actually wait - could it be a synchronous execution issue where test 2's modification PERSISTS into test 3? If test 2's shadeAt runs and modifies `scene.radius` to NaN, and test 3 expects the same version... but tests 2 and 3 use DIFFERENT scene objects!
+
+Unless... the module cache imports the SAME `sun.js` or `shade.js` that then modify whatever source they touch...
+
+Let me actually trace this more carefully by checking if the NaN issue is coming from the right source:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | grep -c "\[shadeAt\] d=143[.0-9]" ; echo "---"; node test/shade.test.js 2>&1 | grep -E "^\[(shadeAt|sun)\].*scene" | head -5
+
+0
+---
+[shadeAt] maxTop=-Infinity scene.top[0]=-32768
+[shadeAt] maxTop=3276.7 scene.top[0]=32767
+
+There are only 2 `[shadeAt]` lines that start with `scene`. One has maxTop=-Infinity (test 2), one has maxTop=3276.7 (test 3). But test 4 only calls sunPosition, not shadeAt! So test 4 shouldn't show `[shadeAt]`.
+
+Wait, why is `sun.alt=-0.313...` NOT showing as `[shadeAt]` for test 4? Test 1 shows `[shadeAt] sun.alt=...`, and it doesn't go through shadeAt! It only uses sunPosition.
+
+So the sequence is:
+- Test 1: uses sunPosition (no shadeAt)
+- Test 2: shadeAt with flat scene (maxTop=-Infinity), tests all d values, NONE are shaded (0/136=0) ✓
+- Test 3: shadeAt with tall scene (maxTop=3276.7), but c=NaN appears - HANG ON!
+
+Let me check why c=NaN happens in test 3. Let me look at which sample points go wrong:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | grep -B1500 "c=NaN" | grep -E "sample " | tail -5
+
+(no output)
+
+No "sample" entries before c=NaN. Let me check the tail more carefully:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -200 | wc -l
+
+     200
+
+Too many lines. Let me try a different approach - directly check if the issue is in how cellOf is being called by adding debug:
+
+
+  ────────────────────────────────────────
+  ▸ edit
+    path src/geometry.js
+    before: /** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+    after: /** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  // DEBUG: check for NaN in scene
+  if (Number.isNaN(scene.radius)) {
+    console.log('[cellOf] scene.radius is NaN! x=' + x + ' y=' + y);
+  }
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+
+Edited src/geometry.js (7 lines -> 11 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | grep -E "^\[cellOf\]" | head -20
+
+(no output)
+
+No NaN warnings! So scene.radius is NOT NaN! The NaN must be coming from somewhere else. Let me check the `scene` object RIGHT before cellOf is called in my debug output. In shade.js, I have:
+
+```javascript
+const c = cellOf(px0 + ex * d, py0 + ny * d);
+```
+
+So the arguments are `px0 + ex * d` and `py0 + ny * d`. If `ex`, `ny`, `px0`, or `py0` are NaN, then `cellOf(NaN, NaN)` returns NaN!
+
+Let me add debug to trace where the NaN is coming from:
+
+
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before:       
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const c = cellOf(px0 + ex * d, py0 + ny * d);
+    after:       
+      for (let d = 0.5; d < maxD; d += 0.5) {
+        const px = px0 + ex * d;
+        const py = py0 + ny * d;
+        if (Number.isNaN(px) || Number.isNaN(py)) {
+          console.log('[shadeAt] px,py ARE NaN! px0=' + px0 + ' py0=' + py0 + ' ex=' + ex + ' ny=' + ny + ' d=' + d);
+        }
+        const c = cellOf(px, py);
+
+No match found for the specified text.
+
+File preview:
+```
+   1: import { sunPosition } from './sun.js';
+   2: import { fromFrame, cellOf } from './geometry.js';
+   3: 
+   4: /**
+   5:  * Compute how much of the courts are shaded at a given date.
+   6:  * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+   7:  * @param {Date} date - The date to compute for
+   8:  * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+   9:  */
+  10: export function shadeAt(scene, date) {
+  11:   const s = sunPosition(date, scene.lat, scene.lng);
+  12:   console.log('[shadeAt] sun.alt=' + s.alt + ' bearing=' + s.bearing);
+  13:   
+  14:   // Return null if sun is at or below horizon
+  15:   if (s.alt <= 0) {
+  16:     return null;
+  17:   }
+  18:   
+  19:   const ex = Math.sin(s.bearing);
+  20:   const ny = Math.cos(s.bearing);
+... (57 more lines)
+```
+
+The edit didn't match because I had only 32 lines not 62. Let me view the file:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && wc -l src/shade.js && head -50 src/shade.js
+
+      77 src/shade.js
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+/**
+ * Compute how much of the courts are shaded at a given date.
+ * @param {Object} scene - The venue scene with lat, lng, radius, cell, g, courts, top
+ * @param {Date} date - The date to compute for
+ * @returns {number|null} - Share of shaded samples (0-1), or null if sun is below horizon
+ */
+export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('[shadeAt] sun.alt=' + s.alt + ' bearing=' + s.bearing);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('[shadeAt] ex=' + ex + ' ny=' + ny + ' rise=' + rise);
+  
+  // Find maxTop (tallest obstacle in the venue, in metres)
+  // top is in decimetres, -32768 = none
+  let maxTop = -Infinity;
+  for (const h of scene.top) {
+    if (h > -32768) {
+      maxTop = Math.max(maxTop, h / 10);
+    }
+  }
+  console.log('[shadeAt] maxTop=' + maxTop + ' scene.top[0]=' + scene.top[0]);
+  
+  let shaded = 0;
+  let n = 0;
+  
+  for (const f of scene.courts) {
+    const h0 = f.z + 1;
+    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+    console.log('[shadeAt] court maxD=' + maxD);
+    
+    // Sample points for this court
+    const samples = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+        samples.push(fromFrame(f, a, b));
+      }
+    }
+    console.log('[shadeAt] samples count=' + samples.length);
+    
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && node test/shade.test.js 2>&1 | tail -100 | grep -E "(ex|ny|px|py)" | head -20
+
+  expected: 1
+    TestContext.<anonymous> (file://work/weak/goose/rally-3d-shade-0/test/shade.test.js:35:10)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && sed -n '1,200p' < <(node test/shade.test.js 2>&1) | grep -E "^\[(shadeAt|cellOf)\]" 
+
+[shadeAt] sun.alt=1.1472973514160205 bearing=3.0316692789970405
+[shadeAt] ex=0.10970213822417842 ny=-0.9939645068457139 rise=2.218397226982552
+[shadeAt] maxTop=-Infinity scene.top[0]=-32768
+[shadeAt] court maxD=-Infinity
+[shadeAt] samples count=136
+[shadeAt] sample 1: (-11.285, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 2: (-11.285, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 3: (-11.285, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 4: (-11.285, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 5: (-11.285, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 6: (-11.285, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 7: (-11.285, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 8: (-11.285, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 9: (-9.885, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 10: (-9.885, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 11: (-9.885, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 12: (-9.885, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 13: (-9.885, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 14: (-9.885, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 15: (-9.885, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 16: (-9.885, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 17: (-8.485, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 18: (-8.485, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 19: (-8.485, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 20: (-8.485, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 21: (-8.485, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 22: (-8.485, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 23: (-8.485, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 24: (-8.485, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 25: (-7.084999999999999, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 26: (-7.084999999999999, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 27: (-7.084999999999999, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 28: (-7.084999999999999, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 29: (-7.084999999999999, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 30: (-7.084999999999999, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 31: (-7.084999999999999, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 32: (-7.084999999999999, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 33: (-5.684999999999999, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 34: (-5.684999999999999, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 35: (-5.684999999999999, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 36: (-5.684999999999999, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 37: (-5.684999999999999, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 38: (-5.684999999999999, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 39: (-5.684999999999999, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 40: (-5.684999999999999, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 41: (-4.284999999999998, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 42: (-4.284999999999998, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 43: (-4.284999999999998, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 44: (-4.284999999999998, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 45: (-4.284999999999998, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 46: (-4.284999999999998, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 47: (-4.284999999999998, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 48: (-4.284999999999998, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 49: (-2.8849999999999985, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 50: (-2.8849999999999985, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 51: (-2.8849999999999985, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 52: (-2.8849999999999985, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 53: (-2.8849999999999985, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 54: (-2.8849999999999985, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 55: (-2.8849999999999985, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 56: (-2.8849999999999985, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 57: (-1.4849999999999985, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 58: (-1.4849999999999985, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 59: (-1.4849999999999985, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 60: (-1.4849999999999985, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 61: (-1.4849999999999985, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 62: (-1.4849999999999985, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 63: (-1.4849999999999985, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 64: (-1.4849999999999985, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 65: (-0.08499999999999863, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 66: (-0.08499999999999863, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 67: (-0.08499999999999863, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 68: (-0.08499999999999863, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 69: (-0.08499999999999863, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 70: (-0.08499999999999863, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 71: (-0.08499999999999863, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 72: (-0.08499999999999863, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 73: (1.3150000000000013, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 74: (1.3150000000000013, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 75: (1.3150000000000013, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 76: (1.3150000000000013, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 77: (1.3150000000000013, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 78: (1.3150000000000013, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 79: (1.3150000000000013, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 80: (1.3150000000000013, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 81: (2.715000000000001, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 82: (2.715000000000001, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 83: (2.715000000000001, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 84: (2.715000000000001, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 85: (2.715000000000001, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 86: (2.715000000000001, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 87: (2.715000000000001, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 88: (2.715000000000001, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 89: (4.115000000000001, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 90: (4.115000000000001, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 91: (4.115000000000001, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 92: (4.115000000000001, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 93: (4.115000000000001, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 94: (4.115000000000001, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 95: (4.115000000000001, 3.414999999999999)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 96: (4.115000000000001, 4.8149999999999995)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 97: (5.515000000000001, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 98: (5.515000000000001, -3.5850000000000004)
+
+I can see the sample loop is iterating correctly, but all lines say "NOT SHADED", which is correct for test 2 (flat). But then test 3 should also show all "NOT SHADED" except when we find an obstacle... and c=NaN happens!
+
+Let me look for where c=NaN happens and where test 3's data starts:
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && awk '/maxTop=3276\.7/,/c=NaN/' < <(node test/shade.test.js 2>&1) | head -80
+
+[shadeAt] maxTop=3276.7 scene.top[0]=32767
+[shadeAt] court maxD=165
+[shadeAt] samples count=136
+[shadeAt] sample 1: (-11.285, -4.985)
+[shadeAt]   d=0.5 c=NaN h=NaN t=2.1091986134912757 shaded?false`c=NaN h=NaN` but `t=2.109...` is calculated! But wait - how can `t` (threshold) be calculated if c is NaN? The threshold doesn't depend on c. So:
+
+1. `const c = cellOf(px, py)` → returns NaN
+2. `const obstacleHeight = scene.top[c] / 10;` → `scene.top[NaN] / 10` → NaN
+3. `const threshold = h0 + d * rise;` → normal number
+
+So the issue is `cellOf` returning NaN! When does `cellOf` return NaN? When any of:
+- `scene.radius` is NaN
+- `scene.cell` is NaN or 0
+- `scene.g` is NaN or 0
+
+Or when `px` or `py` are NaN (though cellOf(x=NaN, y=any) should return NaN because floor(NaN/x) = NaN).
+
+Let me add more debug to trace the px, py values:
+
+
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before: export function shadeAt(scene, date) {
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('[shadeAt] sun.alt=' + s.alt + ' bearing=' + s.bearing);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('[shadeAt] ex=' + ex + ' ny=' + ny + ' rise=' + rise);
+    after: export function shadeAt(scene, date) {
+  console.log('[shadeAt] scene.lat=' + scene.lat + ' scene.lng=' + scene.lng + ' scene.radius=' + scene.radius);
+  const s = sunPosition(date, scene.lat, scene.lng);
+  console.log('[shadeAt] sun.alt=' + s.alt + ' bearing=' + s.bearing);
+  
+  // Return null if sun is at or below horizon
+  if (s.alt <= 0) {
+    return null;
+  }
+  
+  const ex = Math.sin(s.bearing);
+  const ny = Math.cos(s.bearing);
+  const rise = Math.tan(s.alt);
+  console.log('[shadeAt] ex=' + ex + ' ny=' + ny + ' rise=' + rise);
+
+Edited src/shade.js (13 lines -> 14 lines)
+  ────────────────────────────────────────
+  ▸ edit
+    path src/shade.js
+    before: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+    after: // DEBUG: Re-import to check if cached
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+Edited src/shade.js (2 lines -> 3 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/weak/goose/rally-3d-shade-0 && rm -rf ~/.cache/goose 2>/dev/null; rm -rf /tmp/node_module_cache 2>/dev/null; node test/shade.test.js 2>&1 | head -20
+
+[shadeAt] scene.lat=47.6 scene.lng=-122.3 scene.radius=110
+[shadeAt] sun.alt=1.1472973514160205 bearing=3.0316692789970405
+[shadeAt] ex=0.10970213822417842 ny=-0.9939645068457139 rise=2.218397226982552
+[shadeAt] maxTop=-Infinity scene.top[0]=-32768
+[shadeAt] court maxD=-Infinity
+[shadeAt] samples count=136
+[shadeAt] sample 1: (-11.285, -4.985)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 2: (-11.285, -3.5850000000000004)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 3: (-11.285, -2.1850000000000005)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 4: (-11.285, -0.7850000000000006)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 5: (-11.285, 0.6149999999999993)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 6: (-11.285, 2.0149999999999992)
+[shadeAt]   NOT SHADED
+[shadeAt] sample 7: (-11.285, 3.414999999999999)
+[shadeAt]   NOT SHADED

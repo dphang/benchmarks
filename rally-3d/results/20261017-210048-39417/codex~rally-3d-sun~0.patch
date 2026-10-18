@@ -1,0 +1,181 @@
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..8e2b6df 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -2,8 +2,110 @@ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+ // Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
++// sun is down.
++
++const SAMPLE_SPACING = 1; // metres
++const NO_OBSTACLE = -32768;
++
++/** Whether the obstacle in a grid cell reaches above the ray at distance t. */
++function blocksAt(top, index, z, tanAlt, t) {
++  const height = top[index];
++  if (height === undefined || height === NO_OBSTACLE) return false;
++  return height > (z + t * tanAlt) * 10;
++}
++
++/**
++ * Walk the ray from (x, y) toward the sun through the obstacle grid. Grid
++ * traversal is done cell by cell so no obstacle between the point and the edge
++ * of the venue can be skipped.
++ */
++function isShaded(scene, x, y, z, dx, dy, tanAlt) {
++  const { radius, cell, g, top } = scene;
++  const start = cellOf(scene, x, y);
++  if (start < 0) return false;
++  let i = start % g;
++  let j = Math.floor(start / g);
++
++  let distance = 0;
++  let stepX = 0;
++  let stepY = 0;
++  let tMaxX = Infinity;
++  let tMaxY = Infinity;
++  let tDeltaX = Infinity;
++  let tDeltaY = Infinity;
++
++  if (dx > 0) {
++    stepX = 1;
++    tMaxX = (-radius + (i + 1) * cell - x) / dx;
++    tDeltaX = cell / dx;
++  } else if (dx < 0) {
++    stepX = -1;
++    tMaxX = (-radius + i * cell - x) / dx;
++    tDeltaX = -cell / dx;
++  }
++
++  if (dy > 0) {
++    stepY = -1;
++    tMaxY = (radius - j * cell - y) / dy;
++    tDeltaY = cell / dy;
++  } else if (dy < 0) {
++    stepY = 1;
++    tMaxY = (radius - (j + 1) * cell - y) / dy;
++    tDeltaY = -cell / dy;
++  }
++
++  for (let steps = 0; steps <= 2 * g; steps++) {
++    if (blocksAt(top, j * g + i, z, tanAlt, distance)) return true;
++
++    if (tMaxX < tMaxY) {
++      i += stepX;
++      distance = tMaxX;
++      tMaxX += tDeltaX;
++    } else if (tMaxY < tMaxX) {
++      j += stepY;
++      distance = tMaxY;
++      tMaxY += tDeltaY;
++    } else {
++      // A ray through a grid corner crosses both cell boundaries at once.
++      i += stepX;
++      j += stepY;
++      distance = tMaxX;
++      tMaxX += tDeltaX;
++      tMaxY += tDeltaY;
++    }
++
++    if (i < 0 || j < 0 || i >= g || j >= g) return false;
++  }
++
++  return false;
++}
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (alt <= 0) return null;
++
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++  const tanAlt = Math.tan(alt);
++
++  let samples = 0;
++  let shaded = 0;
++
++  for (const court of scene.courts) {
++    const along = Math.max(1, Math.ceil(court.pl / SAMPLE_SPACING));
++    const across = Math.max(1, Math.ceil(court.pw / SAMPLE_SPACING));
++    const z = court.z ?? 0;
++
++    for (let a = 0; a < along; a++) {
++      const localA = -court.pl / 2 + (a + 0.5) * court.pl / along;
++      for (let b = 0; b < across; b++) {
++        const localB = -court.pw / 2 + (b + 0.5) * court.pw / across;
++        const [x, y] = fromFrame(court, localA, localB);
++        samples++;
++        if (isShaded(scene, x, y, z, dx, dy, tanAlt)) shaded++;
++      }
++    }
++  }
++
++  return samples === 0 ? 0 : shaded / samples;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..9241270 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,57 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position (the SunCalc formulas).
++
++const dayMs = 86400000;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const rad = Math.PI / 180;
++const e = rad * 23.4397;
++
++function toDays(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970 - J2000;
++}
++
++function declination(l) {
++  return Math.asin(Math.sin(e) * Math.sin(l));
++}
++
++function rightAscension(l) {
++  return Math.atan2(Math.sin(l) * Math.cos(e), Math.cos(l));
++}
++
++function siderealTime(d, lw) {
++  return rad * (280.16 + 360.9856235 * d) - lw;
++}
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = toDays(date);
++  const lw = -lng * rad;
++  const phi = lat * rad;
++
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (
++    1.9148 * Math.sin(M) +
++    0.02 * Math.sin(2 * M) +
++    0.0003 * Math.sin(3 * M)
++  );
++  const L = M + C + rad * 102.9372 + Math.PI;
++
++  const dec = declination(L);
++  const ra = rightAscension(L);
++  const H = siderealTime(d, lw) - ra;
++
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) +
++    Math.cos(phi) * Math.cos(dec) * Math.cos(H)
++  );
++
++  // SunCalc's azimuth is measured from south toward west; compass bearings
++  // are measured clockwise from north.
++  const az = Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)
++  );
++  const tau = 2 * Math.PI;
++  const bearing = ((az + Math.PI) % tau + tau) % tau;
++
++  return { alt, bearing };
+ }

@@ -1,0 +1,711 @@
+Reading additional input from stdin...
+OpenAI Codex v0.162.1
+--------
+workdir: work/strong/codex/rally-3d-shade-0
+model: bench-model
+provider: bench
+approval: never
+sandbox: danger-full-access
+reasoning effort: none
+reasoning summaries: none
+session id: 01a14d28-985a-7b61-88e7-a2fa583a44de
+--------
+user
+Rally's court pages have a 3D view that traces how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser with three.js. We want the same numbers on the server to precompute a shade forecast.
+
+Port it to headless Node in this repo: implement `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). README.md has the scene format and the exact trace; reference/sun.ts and reference/viewer-shade.ts are the current browser implementations. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.
+warning: Model metadata for `bench-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+codex
+I’ll inspect the scene format, reference implementations, and tests first, then port the math and verify with `node --test`.
+exec
+/bin/zsh -c 'git status --short && git log -5 --oneline' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+c10cc1e init
+
+exec
+/bin/zsh -c "pwd && rg --files -g '"'!*node_modules*'"'" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+work/strong/codex/rally-3d-shade-0
+README.md
+package.json
+test/shade.test.js
+src/shade.js
+src/geometry.js
+src/sun.js
+reference/viewer-shade.ts
+reference/sun.ts
+venues/bellevue-crossroads-park.json
+venues/kenmore-inglemoor-hs.json
+venues/kirkland-peter-kirk-park.json
+
+exec
+/bin/zsh -c "sed -n '1,260p' README.md" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+# rally-court3d — headless shade precompute
+
+Rally's court pages have a **3D view** (`/courts/<slug>/3d`) that draws each venue
+from LiDAR — ground, tree crowns, buildings, courts — lights it with the real
+sun, and traces how much of the courts the trees and buildings shade as the day
+goes on. Today that trace runs in the browser with three.js; we want the same
+numbers on the server so we can precompute a shade forecast per court.
+
+This package is the headless port. It is plain Node (ESM), no three.js, no
+network.
+
+## What to implement
+
+Two modules, both exported as named functions:
+
+### `src/sun.js` — `sunPosition(date, lat, lng) -> { alt, bearing }`
+
+The SunCalc formulas, exactly as the browser uses them (`reference/sun.ts` is the
+current implementation — port it). `alt` is elevation above the horizon in
+radians, `bearing` is the compass bearing toward the sun in radians, clockwise
+from north.
+
+### `src/shade.js` — `shadeAt(scene, date) -> number | null`
+
+How much of the courts a venue's trees and buildings shade at `date`:
+
+- Compute `s = sunPosition(date, scene.lat, scene.lng)`.
+- If the sun is at or below the horizon (`s.alt <= 0`) return `null`.
+- Otherwise return the **share of court sample points in shadow** (0–1).
+
+The trace, matching the browser (`reference/viewer-shade.ts`):
+
+```
+ex = sin(s.bearing);  ny = cos(s.bearing);  rise = tan(s.alt)
+```
+
+From each sample point, walk toward the sun in steps of **0.5 m** starting at
+`d = 0.5`, up to `maxD = min(scene.radius * 1.5, (maxTop - h0) / rise)` where
+`h0 = court.z + 1` and `maxTop` is the tallest obstacle in the venue (metres).
+At each step look up the obstacle grid at `(px + ex*d, py + ny*d)`. A point is
+**shaded** if that cell holds an obstacle taller than `h0 + d * rise`. Stop the
+walk early if the step leaves the grid.
+
+Sample points, per court: `a` from `-pl/2 + 0.6` to `pl/2` and `b` from
+`-pw/2 + 0.5` to `pw/2`, both in **1.4 m** steps, mapped to world coordinates by
+
+```
+fromFrame(court, a, b) = [ court.cx + cos(theta)*a - sin(theta)*b,
+                           court.cy + sin(theta)*a + cos(theta)*b ]
+```
+
+The result is the count of shaded samples over the total number of samples across
+every court.
+
+### `src/geometry.js` — `fromFrame` and `cellOf` (given)
+
+Cell lookup for the obstacle grid:
+
+```
+cellOf(scene, x, y):
+  i = floor((x + radius) / cell);  j = floor((radius - y) / cell)
+  out of range        -> -1
+  otherwise           -> j * g + i
+```
+
+## The venue scene
+
+`venues/*.json` are baked exactly like the browser's scenes, but the obstacle
+grid is stored plainly instead of base64:
+
+```
+{ name, lat, lng, radius,   // metres
+  cell,                     // metres per grid cell
+  g,                        // grid width in cells (grid is g x g)
+  courts: [ { sport, cx, cy, theta, pl, pw, AL, AW, z } ],
+  top: [ ... g*g ints ... ] // obstacle top height, decimetres; -32768 = none
+}
+```
+
+Obstacle heights are in **decimetres** (divide by 10 for metres), same as the
+browser's `topDm`. Note `cell` is not always 1 m, so `cellOf` is the general
+form of the browser's lookup.
+
+## Tests
+
+`test/shade.test.js` has a few cases. `node --test`.
+
+exec
+/bin/zsh -c "cat test/shade.test.js && printf '\\n--- package ---\\n' && cat package.json" in work/strong/codex/rally-3d-shade-0
+exec
+/bin/zsh -c "sed -n '1,260p' reference/sun.ts && printf '\\n--- viewer-shade ---\\n' && sed -n '1,340p' reference/viewer-shade.ts" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+import test from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sunPosition } from '../src/sun.js';
+import { shadeAt } from '../src/shade.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test('sun is up at local midday and down at night (Seattle, June)', () => {
+  const noon = new Date('2026-06-21T20:00:00Z'); // ~13:00 PDT
+  const night = new Date('2026-06-21T08:00:00Z'); // ~01:00 PDT
+  const s = sunPosition(noon, 47.6, -122.3);
+  assert.ok(s.alt > 0.5, 'sun should be high at midday');
+  assert.ok(s.bearing >= 0 && s.bearing < 2 * Math.PI, 'bearing wraps to [0, 2pi)');
+  assert.ok(sunPosition(night, 47.6, -122.3).alt < 0, 'sun below horizon at night');
+});
+
+test('a flat venue with no obstacles is never shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(-32768),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 0);
+});
+
+test('a venue buried in tall obstacles is fully shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(32767),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 1);
+});
+
+test('the sun is down after dark: shadeAt is null', () => {
+  const scene = JSON.parse(readFileSync(join(here, '..', 'venues', 'kenmore-inglemoor-hs.json'), 'utf8'));
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T09:00:00Z')), null);
+});
+
+--- package ---
+{
+  "name": "rally-court3d",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "test": "node --test"
+  }
+}
+
+ succeeded in 0ms:
+// Sun position (the SunCalc formulas) and local-time helpers for the 3D view.
+
+const rad = Math.PI / 180;
+
+export interface SunPos {
+  /** Elevation above the horizon, radians. */
+  alt: number;
+  /** Compass bearing toward the sun, radians clockwise from north. */
+  bearing: number;
+}
+
+export function sunPosition(date: Date, lat: number, lng: number): SunPos {
+  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
+  const M = rad * (357.5291 + 0.98560028 * d);
+  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const L = M + C + rad * 102.9372 + Math.PI;
+  const e = rad * 23.4397;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
+  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
+  const phi = rad * lat;
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+}
+
+function tzOffset(t: number, tz: string): number {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(t)
+      .map((x) => [x.type, x.value]),
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - t;
+}
+
+/** The instant that is `minutes` after local midnight on `ymd` (YYYY-MM-DD) in `tz`. */
+export function zonedTime(ymd: string, minutes: number, tz: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const guess = Date.UTC(y, m - 1, d, 0, minutes);
+  return new Date(guess - tzOffset(guess - tzOffset(guess, tz), tz));
+}
+
+/** Today's date (YYYY-MM-DD) in `tz`. */
+export function localYmd(date: Date, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date);
+}
+
+--- viewer-shade ---
+  // ---------- shade tracing against the LiDAR obstacle grid ----------
+  const samples = data.courts.map((f) => {
+    const out: [number, number][] = [];
+    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4)
+      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) out.push(fromFrame(f, a, b));
+    return out;
+  });
+  const traced = (s: SunPos): number => {
+    const ex = Math.sin(s.bearing);
+    const ny = Math.cos(s.bearing);
+    const rise = Math.tan(s.alt);
+    let shaded = 0;
+    let n = 0;
+    data.courts.forEach((f, ci) => {
+      const h0 = f.z + 1;
+      const maxD = Math.min(R * 1.5, (maxTop - h0) / rise);
+      for (const [px0, py0] of samples[ci]) {
+        n++;
+        for (let d = 0.5; d < maxD; d += 0.5) {
+          const c = cellOf(px0 + ex * d, py0 + ny * d);
+          if (c < 0) break;
+          if (topDm[c] !== -32768 && topDm[c] / 10 > h0 + d * rise) {
+            shaded++;
+            break;
+          }
+        }
+      }
+    });
+    return n ? shaded / n : 0;
+  };
+
+exec
+/bin/zsh -c "cat src/sun.js && printf '\\n--- shade ---\\n' && cat src/shade.js && printf '\\n--- geometry ---\\n' && sed -n '1,360p' src/geometry.js" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+// Sun position (the SunCalc formulas), as the 3D view uses them.
+// Port reference/sun.ts. Not implemented yet.
+
+export function sunPosition(date, lat, lng) {
+  throw new Error('sunPosition is not implemented');
+}
+
+--- shade ---
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// Share of court samples shaded by trees/buildings at `date`, or null when the
+// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
+
+export function shadeAt(scene, date) {
+  throw new Error('shadeAt is not implemented');
+}
+
+--- geometry ---
+// Given helpers: court frame -> world, and obstacle-grid cell lookup.
+
+export const deg = Math.PI / 180;
+
+/** Court-local (a along the length, b across) -> world [x, y]. */
+export function fromFrame(f, a, b) {
+  return [
+    f.cx + Math.cos(f.theta) * a - Math.sin(f.theta) * b,
+    f.cy + Math.sin(f.theta) * a + Math.cos(f.theta) * b,
+  ];
+}
+
+/** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+
+codex
+
+exec
+/bin/zsh -c "rg -n \"maxTop|topDm|traced|fromFrame|cellOf\" . -g '"'!node_modules'"'" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+./src/shade.js:2:import { fromFrame, cellOf } from './geometry.js';
+./reference/viewer-shade.ts:5:      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) out.push(fromFrame(f, a, b));
+./reference/viewer-shade.ts:8:  const traced = (s: SunPos): number => {
+./reference/viewer-shade.ts:16:      const maxD = Math.min(R * 1.5, (maxTop - h0) / rise);
+./reference/viewer-shade.ts:20:          const c = cellOf(px0 + ex * d, py0 + ny * d);
+./reference/viewer-shade.ts:22:          if (topDm[c] !== -32768 && topDm[c] / 10 > h0 + d * rise) {
+./src/geometry.js:6:export function fromFrame(f, a, b) {
+./src/geometry.js:14:export function cellOf(scene, x, y) {
+./README.md:38:`d = 0.5`, up to `maxD = min(scene.radius * 1.5, (maxTop - h0) / rise)` where
+./README.md:39:`h0 = court.z + 1` and `maxTop` is the tallest obstacle in the venue (metres).
+./README.md:48:fromFrame(court, a, b) = [ court.cx + cos(theta)*a - sin(theta)*b,
+./README.md:55:### `src/geometry.js` — `fromFrame` and `cellOf` (given)
+./README.md:60:cellOf(scene, x, y):
+./README.md:81:browser's `topDm`. Note `cell` is not always 1 m, so `cellOf` is the general
+
+exec
+/bin/zsh -c 'wc -c venues/*.json && node --version' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+   58555 venues/bellevue-crossroads-park.json
+   71330 venues/kenmore-inglemoor-hs.json
+   67266 venues/kirkland-peter-kirk-park.json
+  197151 total
+v22.22.1
+
+codex
+The contract is explicit, so I’m checking the baked venues and trace edge cases before writing the port, especially `maxTop`, loop bounds, and sample count behavior.
+exec
+/bin/zsh -c 'for f in venues/*.json; do echo "--- $f"; node -e "const s=JSON.parse(require('"'fs').readFileSync(process.argv[1],'utf8')); console.log({name:s.name,lat:s.lat,lng:s.lng,radius:s.radius,cell:s.cell,g:s.g,courts:s.courts.length,topLen:s.top.length,topMin:Math.min(...s.top),topMax:Math.max(...s.top)}); console.log(s.courts[0])\" \""'$f"; done' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+--- venues/bellevue-crossroads-park.json
+{
+  name: 'Bellevue - Crossroads Park',
+  lat: 47.620116,
+  lng: -122.128019,
+  radius: 110,
+  cell: 2,
+  g: 110,
+  courts: 2,
+  topLen: 12100,
+  topMin: -32768,
+  topMax: 494
+}
+{
+  sport: 'tennis',
+  cx: 8.7,
+  cy: 2.3,
+  theta: 1.5708,
+  pl: 23.77,
+  pw: 10.97,
+  AL: 36.6,
+  AW: 18.3,
+  z: 0
+}
+--- venues/kenmore-inglemoor-hs.json
+{
+  name: 'Kenmore - Inglemoor HS',
+  lat: 47.743365,
+  lng: -122.22164,
+  radius: 110,
+  cell: 2,
+  g: 110,
+  courts: 6,
+  topLen: 12100,
+  topMin: -32768,
+  topMax: 370
+}
+{
+  sport: 'tennis',
+  cx: 4.3,
+  cy: -20.2,
+  theta: 1.7202,
+  pl: 23.77,
+  pw: 10.97,
+  AL: 36.6,
+  AW: 18.3,
+  z: 0
+}
+--- venues/kirkland-peter-kirk-park.json
+{
+  name: 'Kirkland - Peter Kirk Park',
+  lat: 47.677762,
+  lng: -122.200954,
+  radius: 110,
+  cell: 2,
+  g: 110,
+  courts: 6,
+  topLen: 12100,
+  topMin: -32768,
+  topMax: 536
+}
+{
+  sport: 'pickleball',
+  cx: 12.6,
+  cy: -2.5,
+  theta: 1.9961,
+  pl: 13.41,
+  pw: 6.1,
+  AL: 19.4,
+  AW: 9.1,
+  z: 0
+}
+
+exec
+/bin/zsh -c "apply_patch <<'PATCH'
+*** Begin Patch
+*** Update File: src/sun.js
+@@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+ // Port reference/sun.ts. Not implemented yet.
+ 
++const rad = Math.PI / 180;
++
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++  const e = rad * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }
+*** Update File: src/shade.js
+@@
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++  const maxTop = scene.top.reduce((max, top) => (top > max ? top : max), -32768) / 10;
++
++  let shaded = 0;
++  let total = 0;
++
++  for (const court of scene.courts) {
++    const h0 = court.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -court.pl / 2 + 0.6; a <= court.pl / 2; a += 1.4) {
++      for (let b = -court.pw / 2 + 0.5; b <= court.pw / 2; b += 1.4) {
++        total++;
++        const [px, py] = fromFrame(court, a, b);
++
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const cell = cellOf(scene, px + ex * d, py + ny * d);
++          if (cell < 0) break;
++
++          const top = scene.top[cell];
++          if (top "'!== -32768 && top / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return total ? shaded / total : 0;
+ }
+*** End Patch
+PATCH
+node --test' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+Success. Updated the following files:
+M src/sun.js
+M src/shade.js
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.060375
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 0.654417
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 0.323167
+  type: 'test'
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.790708
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.709083
+
+codex
+I’ve confirmed the venues use the documented grid format and that the browser loop is direct JavaScript math. I’ll now port the SunCalc formulas verbatim and implement the shaded-sample trace exactly.
+exec
+/bin/zsh -c 'git status --short' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+ M src/shade.js
+ M src/sun.js
+
+exec
+/bin/zsh -c 'git diff -- src/sun.js src/shade.js' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+diff --git a/src/shade.js b/src/shade.js
+index 368044e..f017f92 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -5,5 +5,39 @@ import { fromFrame, cellOf } from './geometry.js';
+ // sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++  const maxTop = scene.top.reduce((max, top) => (top > max ? top : max), -32768) / 10;
++
++  let shaded = 0;
++  let total = 0;
++
++  for (const court of scene.courts) {
++    const h0 = court.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -court.pl / 2 + 0.6; a <= court.pl / 2; a += 1.4) {
++      for (let b = -court.pw / 2 + 0.5; b <= court.pw / 2; b += 1.4) {
++        total++;
++        const [px, py] = fromFrame(court, a, b);
++
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const cell = cellOf(scene, px + ex * d, py + ny * d);
++          if (cell < 0) break;
++
++          const top = scene.top[cell];
++          if (top !== -32768 && top / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return total ? shaded / total : 0;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index 4e9c04e..34c37f9 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,6 +1,21 @@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+ // Port reference/sun.ts. Not implemented yet.
+ 
++const rad = Math.PI / 180;
++
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++  const e = rad * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }
+
+exec
+/bin/zsh -c "node --input-type=module -e \"import {readFileSync} from 'node:fs'; import {shadeAt} from './src/shade.js'; import {sunPosition} from './src/sun.js'; for (const f of ['bellevue-crossroads-park','kenmore-inglemoor-hs','kirkland-peter-kirk-park']) { const s=JSON.parse(readFileSync('venues/'+f+'.json','utf8')); for (const t of ['2026-06-21T17:00:00Z','2026-06-21T20:00:00Z','2026-06-21T23:00:00Z']) { const d=new Date(t); const p=sunPosition(d,s.lat,s.lng); console.log(f,t,'alt',p.alt.toFixed(3),'shade',shadeAt(s,d)); } }\"" in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+bellevue-crossroads-park 2026-06-21T17:00:00Z alt 0.790 shade 0.5698529411764706
+bellevue-crossroads-park 2026-06-21T20:00:00Z alt 1.147 shade 0.15441176470588236
+bellevue-crossroads-park 2026-06-21T23:00:00Z alt 0.849 shade 0.5551470588235294
+kenmore-inglemoor-hs 2026-06-21T17:00:00Z alt 0.789 shade 0.0196078431372549
+kenmore-inglemoor-hs 2026-06-21T20:00:00Z alt 1.145 shade 0
+kenmore-inglemoor-hs 2026-06-21T23:00:00Z alt 0.850 shade 0.01715686274509804
+kirkland-peter-kirk-park 2026-06-21T17:00:00Z alt 0.789 shade 0
+kirkland-peter-kirk-park 2026-06-21T20:00:00Z alt 1.146 shade 0
+kirkland-peter-kirk-park 2026-06-21T23:00:00Z alt 0.850 shade 0
+
+codex
+The visible suite passes. I’m doing a final diff review and sanity-checking venue outputs to catch any mismatch with the reference semantics before wrapping up.
+codex
+The port matches the reference flow and produces plausible per-venue forecasts. I’m removing the now-stale “not implemented” comments, then rerunning the suite once more.
+exec
+/bin/zsh -c "apply_patch <<'PATCH'
+*** Begin Patch
+*** Update File: src/sun.js
+@@
+-// Sun position (the SunCalc formulas), as the 3D view uses them.
+-// Port reference/sun.ts. Not implemented yet.
++// Sun position (the SunCalc formulas), as the 3D view uses them.
+*** Update File: src/shade.js
+@@
+-// Share of court samples shaded by trees/buildings at "'`date`, or null when the
+-// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
++// Share of court samples shaded by trees/buildings at `date`, or null when the
++// sun is down.
+*** End Patch
+PATCH
+node --test' in work/strong/codex/rally-3d-shade-0
+ succeeded in 0ms:
+Success. Updated the following files:
+M src/sun.js
+M src/shade.js
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.089166
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 0.75925
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 0.392083
+  type: 'test'
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.8365
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 53.969166
+
+codex
+Implemented the headless shade precompute:
+
+- `src/sun.js`: SunCalc `alt` and compass `bearing` port.
+- `src/shade.js`: court sampling, obstacle-grid ray trace, tallest-obstacle handling, and shaded-share calculation.
+- Returns `null` when the sun is at or below the horizon.
+
+Validation: `node --test` passes all 4 tests.
+tokens used
+13,533
+Implemented the headless shade precompute:
+
+- `src/sun.js`: SunCalc `alt` and compass `bearing` port.
+- `src/shade.js`: court sampling, obstacle-grid ray trace, tallest-obstacle handling, and shaded-share calculation.
+- Returns `null` when the sun is at or below the horizon.
+
+Validation: `node --test` passes all 4 tests.

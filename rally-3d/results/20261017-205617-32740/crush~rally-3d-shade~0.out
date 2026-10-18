@@ -1,0 +1,1 @@
+Implemented `sunPosition` in `src/sun.js:11` and `shadeAt` in `src/shade.js:16`, matching the SunCalc formulas and 0.5 m obstacle trace. `node --test` passes all 4 tests; only the two source files changed.

@@ -1,0 +1,5 @@
+rally-3d/work/
+rally-3d/__pycache__/
+rally-3d/meter-*.jsonl
+node_modules/
+.DS_Store

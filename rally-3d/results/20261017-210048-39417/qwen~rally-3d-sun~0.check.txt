@@ -1,0 +1,33 @@
+  duration_ms: 0.524625
+  type: 'test'
+  ...
+# Subtest: a wall shades only when it lies toward the sun
+ok 6 - a wall shades only when it lies toward the sun
+  ---
+  duration_ms: 3.107291
+  type: 'test'
+  ...
+# Subtest: a wall that the rising ray clears does not shade
+ok 7 - a wall that the rising ray clears does not shade
+  ---
+  duration_ms: 0.510958
+  type: 'test'
+  ...
+# Subtest: obstacles below the court elevation do not shade
+ok 8 - obstacles below the court elevation do not shade
+  ---
+  duration_ms: 0.247583
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.2715
+all behaviour checks passed
+
+--- stderr ---

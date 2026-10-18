@@ -1,0 +1,183 @@
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..9f30c7c 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -1,9 +1,57 @@
+ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+-// Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
++// Court samples sit on a regular metric grid, so the pooled fraction weights
++// courts by area rather than by how the grid happens to fall on each one.
++const SAMPLE_SPACING = 1; // metres
+ 
++const NO_OBSTACLE = -32768;
++
++/**
++ * Walk from a court sample toward the sun and report whether an obstacle's top
++ * rises above the sun's ray before the venue grid ends.
++ */
++function inShadow(scene, x, y, z, dx, dy, tanAlt, step, maxDist) {
++  for (let dist = 0; dist <= maxDist; dist += step) {
++    const cell = cellOf(scene, x + dx * dist, y + dy * dist);
++    if (cell < 0) return false; // the venue ends before an obstacle is reached
++    const top = scene.top[cell];
++    if (top !== NO_OBSTACLE && top / 10 > z + dist * tanAlt) return true;
++  }
++  return false;
++}
++
++/** Share (0-1) of court samples in shadow at `date`, or null when the sun is down. */
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (!(alt > 0)) return null;
++
++  // World axes: x east, y north. A bearing is clockwise from north.
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++  const tanAlt = Math.tan(alt);
++  const step = scene.cell / 2;
++  const maxDist = 2 * scene.radius * Math.SQRT2;
++
++  let total = 0;
++  let shaded = 0;
++
++  for (const court of scene.courts) {
++    const na = Math.max(1, Math.round(court.pl / SAMPLE_SPACING));
++    const nb = Math.max(1, Math.round(court.pw / SAMPLE_SPACING));
++    const da = court.pl / na;
++    const db = court.pw / nb;
++
++    for (let i = 0; i < na; i++) {
++      const a = -court.pl / 2 + (i + 0.5) * da;
++      for (let j = 0; j < nb; j++) {
++        const b = -court.pw / 2 + (j + 0.5) * db;
++        const [x, y] = fromFrame(court, a, b);
++        total++;
++        if (inShadow(scene, x, y, court.z, dx, dy, tanAlt, step, maxDist)) shaded++;
++      }
++    }
++  }
++
++  return total === 0 ? 0 : shaded / total;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..f1f7609 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,48 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position using the standard SunCalc formulas.
+ 
++const rad = Math.PI / 180;
++const dayMs = 86400000;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const obliquity = rad * 23.4397;
++
++const sin = Math.sin;
++const cos = Math.cos;
++const tan = Math.tan;
++const asin = Math.asin;
++const atan2 = Math.atan2;
++
++function daysSinceJ2000(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970 - J2000;
++}
++
++/**
++ * Position of the sun for a venue at (lat, lng) at `date`.
++ * Returns { alt, bearing }: elevation above the horizon and compass bearing
++ * toward the sun, both in radians; bearing is clockwise from north.
++ */
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const lw = -rad * lng; // longitude, positive west
++  const phi = rad * lat; // latitude
++  const d = daysSinceJ2000(date);
++
++  // Geocentric ecliptic coordinates of the sun.
++  const M = rad * (357.5291 + 0.98560028 * d); // mean anomaly
++  const C = rad * (1.9148 * sin(M) + 0.02 * sin(2 * M) + 0.0003 * sin(3 * M));
++  const P = rad * 102.9372; // perihelion of the Earth
++  const L = M + C + P + Math.PI; // ecliptic longitude
++
++  const dec = asin(sin(obliquity) * sin(L)); // declination
++  const ra = atan2(sin(L) * cos(obliquity), cos(L)); // right ascension
++
++  // Hour angle and horizontal coordinates.
++  const H = rad * (280.16 + 360.9856235 * d) - lw - ra;
++  const alt = asin(sin(phi) * sin(dec) + cos(phi) * cos(dec) * cos(H));
++
++  // SunCalc measures azimuth from south, positive to the west; compass bearing
++  // runs clockwise from north.
++  const azimuth = atan2(sin(H), cos(H) * sin(phi) - tan(dec) * cos(phi));
++  const bearing = (((azimuth + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
++
++  return { alt, bearing };
+ }
+diff --git a/test/sun-shade.test.js b/test/sun-shade.test.js
+new file mode 100644
+index 0000000..6b70dc6
+--- /dev/null
++++ b/test/sun-shade.test.js
+@@ -0,0 +1,57 @@
++import test from 'node:test';
++import assert from 'node:assert';
++import { sunPosition } from '../src/sun.js';
++import { shadeAt } from '../src/shade.js';
++
++const rad = Math.PI / 180;
++
++// A flat 120 m venue with one 2 m-deep wall strip at world y = y0, spanning
++// |x| < 30 m. `heightDm` follows the scene format (decimetres).
++function wallScene(y0, heightDm) {
++  const radius = 60;
++  const g = 60;
++  const cell = 2;
++  const top = new Array(g * g).fill(-32768);
++  for (let i = 0; i < g; i++) {
++    for (let j = 0; j < g; j++) {
++      const x = -radius + i * cell + cell / 2;
++      const y = radius - j * cell - cell / 2;
++      if (Math.abs(x) < 30 && y >= y0 && y < y0 + cell) top[j * g + i] = heightDm;
++    }
++  }
++  return {
++    lat: 47.6, lng: -122.3, radius, cell, g,
++    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
++    top,
++  };
++}
++
++test('sun crosses the meridian south of a northern venue', () => {
++  const noon = sunPosition(new Date('2026-06-21T20:00:00Z'), 47.6, -122.3);
++  assert.ok(Math.abs(noon.alt / rad - 65.7) < 1.5, `alt was ${noon.alt / rad} deg`);
++  assert.ok(Math.abs(noon.bearing / rad - 180) < 10, `bearing was ${noon.bearing / rad} deg`);
++
++  const morning = sunPosition(new Date('2026-06-21T15:00:00Z'), 47.6, -122.3);
++  const evening = sunPosition(new Date('2026-06-22T01:00:00Z'), 47.6, -122.3);
++  assert.ok(morning.bearing < Math.PI, 'morning sun is east of south');
++  assert.ok(evening.bearing > Math.PI, 'evening sun is west of south');
++});
++
++test('a wall shades only when it lies toward the sun', () => {
++  const decemberNoon = new Date('2026-12-21T20:00:00Z');
++  assert.strictEqual(shadeAt(wallScene(-9, 120), decemberNoon), 1, '12 m wall 8 m south');
++  assert.strictEqual(shadeAt(wallScene(8, 120), decemberNoon), 0, 'same wall due north');
++});
++
++test('a wall that the rising ray clears does not shade', () => {
++  const decemberNoon = new Date('2026-12-21T20:00:00Z');
++  // ~46 m away, the sun's ray at 19 deg is already ~16 m up, above a 12 m top.
++  assert.strictEqual(shadeAt(wallScene(-51, 120), decemberNoon), 0);
++});
++
++test('obstacles below the court elevation do not shade', () => {
++  const decemberNoon = new Date('2026-12-21T20:00:00Z');
++  const scene = wallScene(-9, 120);
++  scene.courts[0].z = 13; // wall top is 12 m
++  assert.strictEqual(shadeAt(scene, decemberNoon), 0);
++});

@@ -1,0 +1,33 @@
+  duration_ms: 1.0965
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 0.647167
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 0.346
+  type: 'test'
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.999833
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.409333
+all 36 cases match within 0.01
+
+--- stderr ---

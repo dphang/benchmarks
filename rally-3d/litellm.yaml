@@ -1,0 +1,16 @@
+# One endpoint for every harness (OpenAI chat, OpenAI Responses and Anthropic
+# Messages formats), forwarding to the same hosted model with identical
+# retry/backoff on rate limits. Start with: rally-3d/proxy.sh [model]
+model_list:
+  - model_name: bench-model
+    litellm_params:
+      model: os.environ/BENCH_UPSTREAM          # e.g. mistral/devstral-medium-latest
+      api_key: os.environ/BENCH_UPSTREAM_KEY
+      input_cost_per_token: __COST_IN__     # filled in by proxy.sh, for spend in the log
+      output_cost_per_token: __COST_OUT__
+litellm_settings:
+  drop_params: true          # each harness sends its own extras; drop what the upstream can't take
+  num_retries: 8             # rate limits (429) back off and retry the same way for every agent
+  request_timeout: 300
+general_settings:
+  master_key: sk-bench-local

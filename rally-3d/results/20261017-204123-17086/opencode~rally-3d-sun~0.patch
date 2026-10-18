@@ -1,0 +1,611 @@
+diff --git a/deno.lock b/deno.lock
+new file mode 100644
+index 0000000..1cb7d00
+--- /dev/null
++++ b/deno.lock
+@@ -0,0 +1,25 @@
++{
++  "version": "5",
++  "specifiers": {
++    "jsr:@std/fs@1.0.0": "1.0.0",
++    "jsr:@std/internal@^1.0.14": "1.0.14",
++    "jsr:@std/path@^1.0.2": "1.1.6"
++  },
++  "jsr": {
++    "@std/fs@1.0.0": {
++      "integrity": "d72e4a125af7168d717a2ed1dca77a728b422b0d138fd20579e3fa41a77da943",
++      "dependencies": [
++        "jsr:@std/path"
++      ]
++    },
++    "@std/internal@1.0.14": {
++      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
++    },
++    "@std/path@1.1.6": {
++      "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
++      "dependencies": [
++        "jsr:@std/internal"
++      ]
++    }
++  }
++}
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..e5f85d3 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,80 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position - clean implementation using SunCalc algorithms
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const latRad = lat * Math.PI / 180;
++  const lngRad = lng * Math.PI / 180;
++  
++  const JDN = julianDate(date);
++  const M = meanAnomaly(JDN);
++  const C = equationOfCenter(M);
++  const L = eclipticLongitude(M + C);
++  const delta = declination(L);
++  const RA = rightAscension(L, delta);
++  const T = (JDN - 2451545) / 36525;
++  const GMST = 280.46061837 + 360.98564736629 * (JDN - 2451545) + T * 4.092496 - T * T * 9.2881453;
++  const GMST_rad = GMST * Math.PI / 180;
++  const LST_rad = GMST_rad + lngRad;
++  const RA_rad = RA * Math.PI / 180;
++  let H = LST_rad - RA_rad;
++  while (H > Math.PI) H -= 2 * Math.PI;
++  while (H < -Math.PI) H += 2 * Math.PI;
++  const alt = altitude(delta, H, latRad);
++  let az = Math.atan2(Math.sin(H), -Math.tan(declination(L)) / Math.tan(latRad));
++  
++  if (az < 0) az += 2 * Math.PI;
++  
++  return { alt, bearing: az };
+ }
++
++function julianDate(date) {
++  const t = new Date(date);
++  const y = t.getUTCFullYear();
++  const m = t.getUTCMonth() + 1;
++  const d = t.getUTCDate();
++  const hh = t.getUTCHours();
++  const mm = t.getUTCMinutes();
++  const ss = t.getUTCSeconds();
++  
++  let A = Math.floor(y / 100);
++  let J = Math.floor(y - A + 0.001 * A * (A - 1) / 4) +
++          Math.floor((m + 1) / 12) * 365 +
++          Math.floor((m + 1) / 12) * (3 * ((m + 1) / 12) / 12 + 1) +
++          d - 0.5;
++  J = J + Math.floor(30.6 * ((m + 1) / 12)) + 367 - 2 * A +
++        Math.floor(0.075 * (A % 100)) - Math.floor(J / 36524) * 3 + 71 - 1524.5;
++  J = J + hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24);
++  return J;
++}
++
++function meanAnomaly(jdn) {
++  let g = 357.52910912 + 35999.0502909 * (jdn - 2431008.5) / 36525;
++  g = g % 360;
++  while (g < 0) g += 360;
++  return g;
++}
++
++function equationOfCenter(m) {
++  const m_rad = m * Math.PI / 180;
++  return 1.9146 * Math.sin(m_rad) + 0.02 * Math.sin(2 * m_rad) + 0.0003 * Math.sin(3 * m_rad);
++}
++
++function eclipticLongitude(m_plus_c) {
++  return (280.46061837 + m_plus_c) % 360;
++}
++
++function declination(longitude) {
++  const long_rad = longitude * Math.PI / 180;
++  const eps = 23.43929111;
++  return Math.asin(Math.sin(long_rad) * Math.sin(eps * Math.PI / 180));
++}
++
++function rightAscension(longitude, declination) {
++  const long_rad = longitude * Math.PI / 180;
++  const delta_rad = declination;
++  const e = 23.43929111;
++  return Math.atan2(Math.sin(long_rad) * Math.cos(e * Math.PI / 180), Math.cos(long_rad));
++}
++
++function altitude(delta, H, lat) {
++  return Math.asin(Math.sin(lat) * Math.sin(delta) + Math.cos(lat) * Math.cos(delta) * Math.cos(H));
++}
+\ No newline at end of file
+diff --git a/src/sun.js-e b/src/sun.js-e
+new file mode 100644
+index 0000000..999dc08
+--- /dev/null
++++ b/src/sun.js-e
+@@ -0,0 +1,135 @@
++// Sun position (the SunCalc formulas).
++
++export function sunPosition(date, lat, lng) {
++  // Convert lat, lng to radians
++  const latRad = lat * Math.PI / 180;
++  const lngRad = lng * Math.PI / 180;
++  
++  // Calculate Julian Date
++  const Jdn = julianDate(date);
++  
++  // Calculate mean anomaly
++  const M = meanAnomaly(Jdn);
++  
++  // Calculate equation of center
++  const C = equationOfCenter(M);
++  
++  // Calculate ecliptic longitude
++  const L = eclipticLongitude(M + C);
++  
++  // Calculate declination
++  const delta = declination(L);
++  
++  // Calculate local hour angle
++  const H = localHourAngle(Jdn, latRad, lngRad);
++  
++  // Calculate altitude (elevation in radians)
++  const alt = altitude(delta, H, latRad);
++  
++  // Calculate azimuth (bearing from North, clockwise in radians)
++  const azimuth = azimuth2(delta, H, latRad, alt);
++  
++  return { alt, bearing: azimuth };
++}
++
++// ============= SunCalc Formulas =============
++
++function julianDate(date) {
++  const t = new Date(date);
++  const y = t.getUTCFullYear();
++  const m = t.getUTCMonth() + 1;
++  const d = t.getUTCDate();
++  const hh = t.getUTCHours();
++  const mm = t.getUTCMinutes();
++  const ss = t.getUTCSeconds();
++  
++  let A = Math.floor(y / 100);
++  let J = Math.floor(y - A + 0.001 * A * (A - 1) / 4) +
++          Math.floor((m + 1) / 12) * 365 +
++          Math.floor((m + 1) / 12) * (3 * ((m + 1) / 12) / 12 + 1) +
++          d - 0.5;
++  
++  J = J + Math.floor(30.6 * ((m + 1) / 12)) + 367 - 2 * A +
++        Math.floor(0.075 * (A % 100)) - Math.floor(J / 36524) * 3 + 71 - 1524.5;
++  
++  J = J + hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24);
++  return J;
++}
++
++function meanAnomaly(jdn) {
++  const D = 359.923 / 360 * (jdn - 2451545);
++  const M = 357.529 + D + 0.0003008 * D - 0.0000004 * D * D;
++  return M;
++}
++
++function equationOfCenter(M) {
++  const M_rad = M * Math.PI / 180;
++  return 1.915 * Math.sin(M_rad) + 0.020 * Math.sin(2 * M_rad) + 0.0003 * Math.sin(3 * M_rad);
++}
++
++function eclipticLongitude(M_plus_C) {
++  return 282.9404 + M_plus_C;
++}
++
++function declination(L) {
++  const L_rad = L * Math.PI / 180;
++  const e = 23.44;
++  const delta = Math.asin(Math.sin(L_rad) * Math.sin(e * Math.PI / 180));
++  return delta;
++}
++
++function localHourAngle(jdn, lat, lng) {
++  const J0 = 2451545;
++  const JDays = jdn - J0;
++  
++  // Calculate right ascension of mean sun
++  const meanSunRA = sunRA(jdn);
++  
++  // Local sidereal time  
++  const LST_deg = localSiderealTime(jdn, lng);
++  
++  // Hour angle = LST - RA (radians)
++  const H_rad = (LST_deg - meanSunRA) * Math.PI / 180;
++  H_rad = normalizeAngle(H_rad);
++  
++  return H_rad;
++}
++
++function sunRA(jdn) {
++  const J0 = 2451545;
++  const T = (jdn - J0) / 36525;
++  const RA_deg = 280.46061837 + 360.98564736629 * (jdn - J0) + T * 4.092496 - T * T * 9.2881453;
++  return RA_deg % 360;
++}
++
++function localSiderealTime(jdn, lng) {
++  const J0 = 2451545;
++  const JDays = jdn - J0;
++  const LST_deg = 280.46061837 + 360.98564736629 * JDays + 0.000387933 * (JDays / 36525) * (JDays / 36525) - (JDays / 36525) * (JDays / 36525) * (JDays / 36525) * 0.000387933;
++  return (LST_deg + lng * 360 / 365) % 360;
++}
++
++function normalizeAngle(angle) {
++  angle = angle % (2 * Math.PI);
++  if (angle < 0) angle += 2 * Math.PI;
++  return angle;
++}
++
++function altitude(delta, H, lat) {
++  // delta, H, lat all in radians
++  const alt = Math.asin(Math.sin(lat) * Math.sin(delta) + Math.cos(lat) * Math.cos(delta) * Math.cos(H));
++  return alt;
++}
++
++function azimuth2(delta, H, lat, alt) {
++  // Azimuth from North, clockwise in radians
++  const sinAz = Math.sin(H) * Math.cos(lat) * Math.cos(delta) / Math.cos(alt);
++  const cosAz = (Math.sin(lat) * Math.cos(delta) - Math.sin(alt) * Math.sin(lat)) / Math.cos(alt);
++  
++  let bearing = Math.atan2(sinAz, cosAz);
++  
++  // Normalize to [0, 2*PI)
++  if (bearing < 0) bearing += 2 * Math.PI;
++  
++  return bearing;
++}
+\ No newline at end of file
+diff --git a/sunCalcCheck.js b/sunCalcCheck.js
+new file mode 100644
+index 0000000..ca6a876
+--- /dev/null
++++ b/sunCalcCheck.js
+@@ -0,0 +1,74 @@
++// Test against SunCalc reference implementation
++// https://github.com/noeldelgado/suncalc
++
++function testSunCalcComponents() {
++  const jdn0 = 2456704; 
++  const lowJulian = 2451545; // adjust
++   
++  // Use standard NYC Julian date reference
++  const date = new Date('2026-06-21T12:00:00 America/New_York'); // Noon EDT (UTC-4)
++  
++  console.log("Date:", date);
++  console.log("Timezone:", date.getTimezoneOffset(), "mins (UTC offset: -120/(-60), local: " + timeOffset(date) + ")");
++  
++  // Look at UTC noon on the same day
++  const utcNoon = new Date('2026-06-21T12:00:00Z');
++  console.log("\nUTC Noon:", utcNoon);
++  
++  // Julian Date for June 21st 2026
++  const JD0 = new Date();
++  // Subtract years virtually
++  for (let y=2050; y>2026; y--) {
++    JD0.setFullYear(y-1);
++  }
++  const jdn0_check = JD0.setFullYear(2026);
++  const jdn0 = new Date(2026, 5, 21, 12, 0, 0).toUTCString();
++  console.log("JS Date:", jdn0);
++  
++  // Re-read our formula with proper timestamp
++  function julianDate(date) {
++    const t = new Date(date);
++    const y = t.getUTCFullYear();
++    const m = t.getUTCMonth() + 1;
++    const d = t.getUTCDate();
++    const hh = t.getUTCHours();
++    const mm = t.getUTCMinutes();
++    const ss = t.getUTCSeconds();
++    
++    let A = Math.floor(y / 100);
++    let J = Math.floor(y - A + 0.001 * A * (A - 1) / 4) +
++            Math.floor((m + 1) / 12) * 365 +
++            Math.floor((m + 1) / 12) * (3 * ((m + 1) / 12) / 12 + 1) +
++            d - 0.5;
++    
++    J = J + Math.floor(30.6 * ((m + 1) / 12)) + 367 - 2 * A +
++          Math.floor(0.075 * (A % 100)) - Math.floor(J / 36524) * 3 + 71 - 1524.5;
++    
++    J = J + hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24);
++    return J;
++  }
++  
++  const JDN = julianDate(utcNoon);
++  console.log("JDN:", JDN);
++  
++  // Fresh small lune cycle test
++  const J0 = 2451545.0;
++  const T = (JDN - J0) / 36525;
++  console.log("T (centuries):", T);
++  
++  // Last is: Greenwich mean true longitude from RFC 5102
++  // L_GMT = 280.46061837477719 + 360.98564749999988 * JDN
++  const L_GMT = 280.46061837 + 360.98564749999988 * (JDN - J0);
++  console.log("L_GMT:", L_GMT);
++  const L_GMT_rad = L_GMT % 360; // normalize
++  console.log("L_GMT normalized:", L_GMT_rad);
++}
++
++testSunCalcComponents();
++
++function timeOffset(d) {
++  const local = (new Date(d.getTime() - d.getTimezoneOffset() * 60000)).getDate();
++  const utc = new Date(d.getTime() + (d.getTimezoneOffset() * 60000)).getDate();
++  const diff = local - utc;
++  return diff;
++}
+\ No newline at end of file
+diff --git a/testDebug.js b/testDebug.js
+new file mode 100644
+index 0000000..37ee38d
+--- /dev/null
++++ b/testDebug.js
+@@ -0,0 +1,58 @@
++// Test intermediate values
++
++function julianDate(date) {
++  const y = new Date(date).getUTCFullYear();
++  const m = new Date(date).getUTCMonth() + 1;
++  const d = new Date(date).getUTCDate();
++  const hh = new Date(date).getUTCHours();
++  const J = Math.floor(365.25 * (y + 4716)) +
++          Math.floor(30.6001 * (m + 1)) +
++          d +
++          Math.floor(2 - Math.floor(y / 100) + Math.floor(Math.floor(y / 100) / 4)) -
++          1524.5 +
++          hh / 24;
++  return J;
++}
++
++// June 21, 2026 Seattle local noon = UTC 17:00
++const JDN = julianDate(new Date("2026-06-21T17:00:00Z"));
++
++console.log("JDN:", JDN);
++console.log("Days since 2451545:", JDN - 2451545);
++
++// D = 359.923 / 360 * (JDN - 2451545)
++const D = 359.923 / 360 * (JDN - 2451545);
++console.log("D (deg):", D, "mod 360:", D % 360);
++
++// M = 357.529 + D
++const M = 357.529 + D % 360;
++console.log("M (deg):", M);
++
++// RA calculation
++// L = 282.9404 + M + C
++// C from mean anomaly
++const C = 1.915 * Math.sin(M * Math.PI / 180) + 0.02 * Math.sin(2 * M * Math.PI / 180);
++const L = (282.9404 + M + C) % 360;
++console.log("L (deg):", L);
++
++// Declination
++const delta = Math.asin(Math.sin(L * Math.PI / 180) * Math.sin(23.44 * Math.PI / 180)) * 180 / Math.PI;
++console.log("delta (deg):", delta);
++
++// RA from L
++const L_rad = L * Math.PI / 180;
++const RA = Math.atan2(Math.sin(L_rad) * Math.cos(23.439 * Math.PI / 180), Math.cos(L_rad)) * 180 / Math.PI;
++console.log("RA (deg):", RA);
++
++// GMST = 280.46061837 + 360.98564736629 * JDN
++const GMST = (280.46061837 + 360.98564736629 * (JDN - 2451545)) % 360;
++console.log("GMST (deg):", GMST);
++
++// Hour angle = GMST + longitude (Seattle = -122.3) - RA
++const lngRad = -122.3 * Math.PI / 180;
++const LST = (GMST + (-122.3)) % 360;
++console.log("LST (deg):", LST);
++
++let HA = ((LST - RA) + 360) % 360 - 180;
++console.log("Hour Angle (deg):", HA);
++console.log("Hour Angle (rad):", HA * Math.PI / 180);
+\ No newline at end of file
+diff --git a/testDecl.js b/testDecl.js
+new file mode 100644
+index 0000000..bdb7551
+--- /dev/null
++++ b/testDecl.js
+@@ -0,0 +1,17 @@
++const L = 282.9404; 
++console.log("L:", L, "degrees");
++const L_rad = L * Math.PI / 180;
++const e = 23.44;
++const delta = Math.asin(Math.sin(L_rad) * Math.sin(e * Math.PI / 180));
++console.log("delta:", delta);
++console.log("delta degrees:", delta * 180 / Math.PI);
++
++// June solstice longitude should be around 90° (spring equinox = 0°, summer = 90°)
++// Let me recalculate L from M+C
++const M = 115.425;
++const C = 1.827;
++const L2 = (282.9404 + M + C) % 360;
++console.log("\nL from M+C:", L2, "degrees");
++const L2_rad = L2 * Math.PI / 180;
++const delta2 = Math.asin(Math.sin(L2_rad) * Math.sin(e * Math.PI / 180));
++console.log("delta2 degrees:", delta2 * 180 / Math.PI);
+\ No newline at end of file
+diff --git a/testDecl2.js b/testDecl2.js
+new file mode 100644
+index 0000000..d9881b7
+--- /dev/null
++++ b/testDecl2.js
+@@ -0,0 +1,16 @@
++import { sunPosition } from "./src/sun.js";
++
++// Test at various points
++const dates = [
++  { desc: "Vernal Equinox", d: new Date("2026-03-20T17:00:00Z") },
++  { desc: "Summer Solstice", d: new Date("2026-06-21T17:00:00Z") },
++  { desc: "Autumn Equinox", d: new Date("2026-09-22T17:00:00Z") },
++  { desc: "Winter Solstice", d: new Date("2026-12-21T17:00:00Z") },
++  { desc: "June 21, 2026 Seattle noon", d: new Date("2026-06-21T17:00:00Z") },
++];
++
++for (const entry of dates) {
++  const s = sunPosition(entry.d, 47.6, -122.3);
++  console.log(`${entry.desc}:`);
++  console.log(`  Alt: ${s.alt * 180 / Math.PI}°, B¯earing: ${s.bearing * 180 / Math.PI}`);
++}
+\ No newline at end of file
+diff --git a/testJulian.js b/testJulian.js
+new file mode 100644
+index 0000000..0797357
+--- /dev/null
++++ b/testJulian.js
+@@ -0,0 +1,33 @@
++function julianDate(date) {
++  const t = new Date(date);
++  const y = t.getUTCFullYear();
++  const m = t.getUTCMonth() + 1;
++  const d = t.getUTCDate();
++  const hh = t.getUTCHours();
++  const mm = t.getUTCMinutes();
++  const ss = t.getUTCSeconds();
++  
++  let J = Math.floor(365.25 * (y + 4716)) +
++          Math.floor(30.6001 * (m + 1)) +
++          d +
++          Math.floor(2 - Math.floor(y / 100) + Math.floor(Math.floor(y / 100) / 4)) -
++          1524.5 +
++          hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24);
++  
++  console.log(`Year: ${y}, Month: ${m}, Day: ${d}`);
++  console.log(`  Term1 = 365.25 * (${y} + 4716) = ${Math.floor(365.25 * (y + 4716))}`);
++  console.log(`  Term2 = 30.6001 * (${m} + 1) = ${Math.floor(30.6001 * (m + 1))}`);
++  console.log(`  Term3 = ${d}`);
++  console.log(`  Term4 = 2 - ${Math.floor(y / 100)} + ${Math.floor(Math.floor(y / 100) / 4)} = ${Math.floor(2 - Math.floor(y / 100) + Math.floor(Math.floor(y / 100) / 4))}`);
++  console.log(`  Term5 = -1524.5`);
++  console.log(`  Term6 = ${hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24)}`);
++  console.log(`  J = ${J}`);
++  
++  return J;
++}
++
++const d = new Date("2026-06-21T17:00:00Z");
++console.log("Test date:", d.toISOString());
++const J = julianDate(d);
++console.log("Result:", J);
++console.log("Expected: ~2458864");
+\ No newline at end of file
+diff --git a/testNormalize.js b/testNormalize.js
+new file mode 100644
+index 0000000..210d605
+--- /dev/null
++++ b/testNormalize.js
+@@ -0,0 +1,3 @@
++import { readTextFileSync } from "jsr:@std/fs@1.0.0";
++const content = await Deno.readTextFile("./src/sun.js");
++console.log(content);
+\ No newline at end of file
+diff --git a/testRead2.js b/testRead2.js
+new file mode 100644
+index 0000000..402b425
+--- /dev/null
++++ b/testRead2.js
+@@ -0,0 +1,4 @@
++import * as path from "path";
++import * as fs from "fs";
++const content = fs.readFileSync("./src/sun.js", "utf-8");
++console.log(content);
+\ No newline at end of file
+diff --git a/testSun.js b/testSun.js
+new file mode 100644
+index 0000000..86a9889
+--- /dev/null
++++ b/testSun.js
+@@ -0,0 +1,4 @@
++import { sunPosition } from "./src/sun.js";
++
++const s = sunPosition(new Date("2026-06-21T20:00:00Z"), 47.6, -122.3);
++console.log(s);
+\ No newline at end of file
+diff --git a/testTime.js b/testTime.js
+new file mode 100644
+index 0000000..d9a4323
+--- /dev/null
++++ b/testTime.js
+@@ -0,0 +1,49 @@
++// Test the time calculation step by step
++
++function GMSTFormula(JDays) {
++  return (280.46061837 + 360.98564736629 * JDays) * Math.PI / 180;
++}
++
++// Reference date: 2000-01-01 12:00 UTC
++const refDate = new Date(2000, 0, 1, 12, 0, 0);
++console.log("Reference date:", refDate.toUTCString());
++
++function julianDate(date) {
++  const t = new Date(date);
++  const y = t.getUTCFullYear();
++  const m = t.getUTCMonth() + 1;
++  const d = t.getUTCDate();
++  const hh = t.getUTCHours();
++  const mm = t.getUTCMinutes();
++  const ss = t.getUTCSeconds();
++  let A = Math.floor(y / 100);
++  let J = Math.floor(y - A + 0.001 * A * (A - 1) / 4) +
++          Math.floor((m + 1) / 12) * 365 +
++          Math.floor((m + 1) / 12) * (3 * ((m + 1) / 12) / 12 + 1) +
++          d - 0.5;
++  J = J + Math.floor(30.6 * ((m + 1) / 12)) + 367 - 2 * A +
++        Math.floor(0.075 * (A % 100)) - Math.floor(J / 36524) * 3 + 71 - 1524.5;
++  J = J + hh / 24 + mm / (60 * 24) + ss / (60 * 60 * 24);
++  return J;
++}
++
++const JRef = julianDate(refDate);
++const T = (JRef - 2451545) / 36525;
++const GMST = GMSTFormula(JRef);
++
++console.log("JDN:", JRef);
++console.log("T (centuries):", T);
++console.log("GMST (degrees):", (GMST * 180 / Math.PI) % 360);
++console.log("Expected GMST at 2000-01-01 12:00 UTC: ~102 degrees");
++
++// Now June 21, 2026 noon Seattle = June 21, 2026 17:00 UTC
++const date2 = new Date("2026-06-21T17:00:00Z");
++const J2 = julianDate(date2);
++const T2 = (J2 - 2451545) / 36525;
++const GMST2 = GMSTFormula(J2);
++
++console.log("\n");
++console.log("June 21, 2026 17:00 UTC:");
++console.log("JDN:", J2);
++console.log("T (centuries):", T2);
++console.log("GMST (degrees):", (GMST2 * 180 / Math.PI) % 360);
+\ No newline at end of file
+diff --git a/testVar.js b/testVar.js
+new file mode 100644
+index 0000000..caefa7e
+--- /dev/null
++++ b/testVar.js
+@@ -0,0 +1,22 @@
++import * as fs from "fs";
++
++// Try the simplest assignment test
++function test1() {
++  let x = 1;
++  x = x + 1;
++  return x;
++}
++
++console.log("Test 1:", test1());
++
++// Now test with the actual math
++function test2() {
++  let angle = 0.5;
++  angle = angle % (2 * Math.PI);
++  console.log("Test 2 angle:", angle);
++  if (angle < 0) angle += 2 * Math.PI;
++  console.log("Test 2 result:", angle);
++  return angle;
++}
++
++console.log("Test 2:", test2());
+\ No newline at end of file

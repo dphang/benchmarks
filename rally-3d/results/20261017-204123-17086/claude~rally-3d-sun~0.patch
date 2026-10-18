@@ -1,0 +1,129 @@
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..fb91dbc 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,121 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position using Sastry's formula from SunCalc.
++// Returns { alt: altitude in degrees, bearing: azimuth in radians from North }
++
++const A_PI = Math.PI;
++const A_DEG2RAD = A_PI / 180;
++const A_RAD2DEG = 180 / A_PI;
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  // Get UTC time components
++  const y = date.getUTCFullYear();
++  const mo = date.getUTCMonth() + 1;
++  const d = date.getUTCDate();
++
++  // Calculate Julian Date at 0h UT
++  const JD0 = julianDate(y, mo, d);
++
++  // Julian year for conversions
++  const Jy = y;
++  const Jm = (mo <= 2) ? (mo + 12) : mo;
++
++  // Mean anomaly
++  let M = 357.528 + 0.98560028 * (JD0 - 2451545);
++  while (M < 0) M += 360;
++  while (M >= 360) M -= 360;
++
++  // Eccentricity
++  let e = 0.016708634;
++
++  // Light-time correction
++  let G = 280.46646 + 0.98564736 * (JD0 - 2451545);
++  let r = 1.0 / (1 + e * Math.cos(M * A_DEG2RAD));
++  G = G + 2 * e * r * Math.sin(M * A_DEG2RAD);
++
++  // Convert to geocentric longitude
++  let L = G % 360;
++  if (L < 0) L += 360;
++
++  // Equation of center
++  let C = (1.914602 * Math.sin(M * A_DEG2RAD)) +
++          (0.02 * Math.sin(2 * M * A_DEG2RAD));
++
++  // True geocentric longitude
++  let lambda = (L + C) % 360;
++  if (lambda < 0) lambda += 360;
++
++  // Mean obliquity
++  let e0 = 23.439291;
++
++  // Obliquity correction
++  let mu = (L + C) % 360;
++  if (mu < 0) mu += 360;
++  e0 = e0 + 0.00256 * Math.cos(mu * A_DEG2RAD);
++
++  // Right ascension and declination
++  const raRad = Math.atan2(Math.sin(mu * A_DEG2RAD) * Math.cos(e0 * A_DEG2RAD), Math.cos(mu * A_DEG2RAD));
++  const raDeg = raRad * A_RAD2DEG;
++  const decRad = Math.asin(Math.sin(e0 * A_DEG2RAD) * Math.sin(mu * A_DEG2RAD));
++
++  // Hour angle calculation
++  // Local hour angle = GST - RA (in radians)
++
++  // Calculate GMST0 (Greenwich Mean Sidereal Time at 0h UT for date)
++  const jdDate = JD0 - 2451545.0;
++  let gmst0 = (280.46646 + 36098.94619 * jdDate / 24) % 360;
++  const gmst0Rad = gmst0 * A_DEG2RAD;
++
++  // Convert to radians
++  const lngRad = lng * A_DEG2RAD;
++
++  // Hour angle = (GMST0 - longitude) - RA
++  let hourAngle = (gmst0Rad - lngRad) - raRad;
++
++  // Normalize to [-PI, PI]
++  while (hourAngle > A_PI) hourAngle -= 2 * A_PI;
++  while (hourAngle < -A_PI) hourAngle += 2 * A_PI;
++
++  // Altitude
++  const latRad = lat * A_DEG2RAD;
++  let altRad = Math.asin(Math.sin(latRad) * Math.sin(decRad) + Math.cos(latRad) * Math.cos(decRad) * Math.cos(hourAngle));
++
++  // Check if sun is below horizon
++  if (altRad < -0.0001) {
++    return { alt: -90, bearing: 0 };
++  }
++
++  const alt = altRad * A_RAD2DEG;
++
++  // Azimuth
++  let azimuthRad;
++  if (Math.sin(altRad) > 0) {
++    const azVal = (Math.sin(decRad) - Math.sin(latRad) * Math.sin(altRad)) / (Math.cos(latRad) * Math.cos(altRad));
++    // Clamp to [-1, 1] to avoid domain error from floating point errors
++    azVal = Math.max(-1, Math.min(1, azVal));
++    azimuthRad = Math.acos(azVal);
++  } else {
++    azimuthRad = A_PI;
++  }
++
++  // Azimuth = 0 at North, clockwise
++  // Current azimuth is from the sun's point of view, so adjust
++  let azFromNorth = (azimuthRad + A_PI - gmst0Rad) % (2 * A_PI);
++
++  // Normalize bearing to [0, 2*PI)
++  if (azFromNorth < 0) azFromNorth += 2 * A_PI;
++  if (azFromNorth >= 2 * A_PI) azFromNorth -= 2 * A_PI;
++
++  return {
++    alt: alt,
++    bearing: azFromNorth
++  };
+ }
++
++function julianDate(year, month, day) {
++  if (month <= 2) {
++    year = year - 1;
++    month = month + 12;
++  }
++  const a = Math.floor(year / 100);
++  const b = 2 - a + Math.floor(a / 4);
++  return Math.floor(365.25 * (year + 4716)) + Math.floor(30.6001 * (month + 1)) + day + b - 1524.0;
++}
+\ No newline at end of file

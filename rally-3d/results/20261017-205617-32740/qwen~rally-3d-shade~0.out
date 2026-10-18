@@ -1,0 +1,15 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Ported both modules to headless Node.
+
+**Changes**
+- `src/sun.js` — `sunPosition(date, lat, lng)` is a direct port of the SunCalc formulas from `reference/sun.ts`; returns `{ alt, bearing }` with `bearing` wrapped to `[0, 2π)`.
+- `src/shade.js` — `shadeAt(scene, date)` implements the browser trace exactly:
+  - returns `null` when `s.alt <= 0`;
+  - generates samples per court in 1.4 m steps using `fromFrame`;
+  - computes `maxTop` as the tallest non-sentinel `top` entry in metres, then traces in 0.5 m steps up to `min(radius * 1.5, (maxTop - h0) / rise)`, breaking when `cellOf` leaves the grid;
+  - treats obstacles as shaded only when `top[c] / 10 > h0 + d * rise`, using the `-32768` sentinel correctly;
+  - returns `shaded / totalSamples`.
+
+**Verification**
+- `node --test` → 4/4 passing.
+- Sampled all three real venues across the day: shade is highest at low sun angles and drops at midday (e.g. Bellevue 1.0 at 02:00Z → 0.15 near 13:00 PDT), and values stay within `[0, 1]`. No test files were modified.

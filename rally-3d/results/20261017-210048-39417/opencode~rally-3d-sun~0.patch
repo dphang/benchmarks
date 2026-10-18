@@ -1,0 +1,112 @@
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..ae2ff42 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -1,9 +1,55 @@
+ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+-// Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
+-
++/**
++ * Share of court sample points shaded by trees/buildings at `date`, or null
++ * when the sun is at or below the horizon.
++ */
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const sun = sunPosition(date, scene.lat, scene.lng);
++  if (sun.alt <= 0) return null;
++
++  // Unit direction toward the sun in the ground plane, and the height gained
++  // per metre travelled along that ray.
++  const ex = Math.sin(sun.bearing);
++  const ny = Math.cos(sun.bearing);
++  const rise = Math.tan(sun.alt);
++
++  // No obstacle can shade a point from farther away than this, because the
++  // ray would already be above the tallest obstacle in the scene.
++  let maxTop = -32768 / 10;
++  for (const v of scene.top) {
++    if (v !== -32768 && v / 10 > maxTop) maxTop = v / 10;
++  }
++
++  let shaded = 0;
++  let samples = 0;
++
++  for (const f of scene.courts) {
++    // Sample the playing area on a roughly 1.4 m grid. The ray starts at eye
++    // height above the court surface.
++    const h0 = f.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
++      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
++        const [px, py] = fromFrame(f, a, b);
++        samples++;
++
++        // March away from the point toward the sun. The ray climbs as it goes,
++        // so an obstacle only blocks it if its top is above the ray there.
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const c = cellOf(scene, px + ex * d, py + ny * d);
++          if (c < 0) break; // venue ends before any obstacle is reached
++          const top = scene.top[c];
++          if (top !== -32768 && top / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return samples ? shaded / samples : 0;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..8d17acd 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,41 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position using the standard SunCalc formulas.
+ 
++export const rad = Math.PI / 180;
++
++const dayMs = 1000 * 60 * 60 * 24;
++const J1970 = 2440588;
++const J2000 = 2451545;
++
++/**
++ * Where the sun is at `date` for a venue at (lat, lng).
++ * Returns { alt, bearing }: elevation above the horizon and compass bearing
++ * (clockwise from north), both in radians.
++ */
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = date.valueOf() / dayMs - 0.5 + J1970 - J2000;
++
++  // Mean anomaly, equation of the centre, and ecliptic longitude.
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++
++  // Ecliptic to equatorial coordinates.
++  const e = rad * 23.4397; // obliquity of the Earth
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++
++  // Hour angle and horizontal coordinates.
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi),
++  );
++
++  // SunCalc's azimuth is measured from south toward west; convert it to a
++  // compass bearing measured clockwise from north.
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }

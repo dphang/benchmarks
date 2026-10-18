@@ -1,0 +1,37 @@
+Analytics have been permanently disabled.
+Detected dumb terminal, disabling fancy input and pretty output.
+
+Warning: it's best to only add files that need changes to the chat.
+https://aider.chat/docs/troubleshooting/edit-errors.html
+Aider v0.86.2
+Model: openai/bench-model with whole edit format
+Git repo: .git with 9 files
+Repo-map: using 1024 tokens, auto refresh
+Added README.md to the chat.
+Added package.json to the chat.
+Added src/geometry.js to the chat.
+Added src/shade.js to the chat.
+Added src/sun.js to the chat.
+Added venues/bellevue-crossroads-park.json to the chat.
+Added venues/kenmore-inglemoor-hs.json to the chat.
+Added venues/kirkland-peter-kirk-park.json to the chat.
+
+
+test/shade.test.js
+litellm.BadRequestError: OpenAIException - litellm.BadRequestError: 
+OpenrouterException - {"error":{"message":"Provider returned 
+error","code":400,"metadata":{"raw":"{\n  \"id\": 
+\"p5g5jTo-fdNmn-ac99f378-aws_uw2\",\n  \"error\": {\n    \"message\": 
+\"Requested token count exceeds the model's maximum context length of 262144 
+tokens. You requested a total of 310126 tokens: 179054 tokens from the input 
+messages and 131072 tokens for the completion. Please reduce the number of 
+tokens in the input messages or the completion to fit within the limit.\",\n    
+\"type\": \"invalid_request_error\",\n    \"param\": null,\n    \"code\": null\n
+}\n}","provider_name":"Together","is_byok":false,"previous_errors":[{"code":504,
+"message":"The operation was 
+aborted","provider_name":"Darkbloom"}]}},"user_id":"user_3KZRYfNv3tH0Rsg0CfBxu4A
+LRqt"}
+
+LiteLLM: model group 'bench-model' failed with the error above. No fallback was 
+attempted.
+

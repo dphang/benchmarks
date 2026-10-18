@@ -1,0 +1,3 @@
+Rally's court pages have a 3D view that shows how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser. We want it headless on the server to precompute a shade forecast.
+
+Implement it in this Node package: `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). There is no browser code to copy — README.md writes up the physics and the scene format. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.

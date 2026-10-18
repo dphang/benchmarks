@@ -1,0 +1,1763 @@
+I'll start by exploring the project structure and reading the README.
+  ────────────────────────────────────────
+  ▸ tree
+    path: work/strong/goose/rally-3d-sun-0
+    depth: 3
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat README.md
+
+src/  [33]
+  geometry.js  [19]
+  shade.js  [9]
+  sun.js  [5]
+test/  [41]
+  shade.test.js  [41]
+venues/  [3]
+  bellevue-crossroads-park.json  [1]
+  kenmore-inglemoor-hs.json  [1]
+  kirkland-peter-kirk-park.json  [1]
+README.md  [60]
+package.json  [9]
+# rally-court3d — headless shade (work out the physics)
+
+Rally's court pages have a **3D view** that shows how much of each venue's courts
+the trees and buildings shade as the sun moves. Today that runs in the browser
+with three.js; we want the same on the server to precompute a shade forecast.
+
+Unlike a straight port, this package does **not** ship the browser code — this is
+plain Node (ESM, no three.js, no network), and the geometry is written up below.
+Implement it from the description.
+
+## What to implement
+
+### `src/sun.js` — `sunPosition(date, lat, lng) -> { alt, bearing }`
+
+Where the sun is at `date` for a venue at `(lat, lng)`. Use the standard SunCalc
+formulas (mean anomaly, equation of the centre, ecliptic longitude, declination,
+right ascension, hour angle). `alt` is elevation above the horizon in radians;
+`bearing` is the compass bearing toward the sun in radians, clockwise from north.
+
+### `src/shade.js` — `shadeAt(scene, date) -> number | null`
+
+The share of the courts that is in shadow at `date`:
+
+- If the sun is at or below the horizon (`alt <= 0`) return `null`.
+- Otherwise return the fraction (0–1) of court sample points in shadow.
+
+A sample point is **in shadow** when, looking from the point **toward the sun**,
+an obstacle stands in the way and is **tall enough to block the sun's ray** — a
+point at height `h` blocks the sun only if the obstacle's top rises above the
+ray, which climbs with the sun's elevation as you move away from the point.
+Obstacles whose top is below the ray do not count; neither do points where the
+venue ends before any obstacle is reached.
+
+Cover each court's playing area with a grid of sample points; a court's
+footprint is `pl` by `pw` metres, centred on `(cx, cy)` and rotated by `theta`.
+`src/geometry.js` gives you two helpers:
+
+```
+fromFrame(f, a, b)  // court-local (a along length, b across) -> world [x, y]
+cellOf(scene, x, y) // obstacle-grid cell index for a world point, or -1 outside
+```
+
+## The venue scene
+
+`venues/*.json` are baked from LiDAR:
+
+```
+{ name, lat, lng, radius,   // metres
+  cell,                     // metres per grid cell
+  g,                        // grid width in cells (grid is g x g)
+  courts: [ { sport, cx, cy, theta, pl, pw, AL, AW, z } ],  // z = court elevation, m
+  top: [ ... g*g ints ... ] // obstacle top height, decimetres; -32768 = none
+}
+```
+
+Obstacle height in metres is `top[c] / 10`.
+
+## Tests
+
+`test/shade.test.js` has a few cases. `node --test`.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat src/geometry.js && echo "=== sun.js ===" && cat src/sun.js && echo "=== shade.js ===" && cat src/shade.js && echo "=== package.json ===" && cat package.json && echo "=== test ===" && cat test/shade.test.js
+
+// Given helpers: court frame -> world, and obstacle-grid cell lookup.
+
+export const deg = Math.PI / 180;
+
+/** Court-local (a along the length, b across) -> world [x, y]. */
+export function fromFrame(f, a, b) {
+  return [
+    f.cx + Math.cos(f.theta) * a - Math.sin(f.theta) * b,
+    f.cy + Math.sin(f.theta) * a + Math.cos(f.theta) * b,
+  ];
+}
+
+/** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+export function cellOf(scene, x, y) {
+  const i = Math.floor((x + scene.radius) / scene.cell);
+  const j = Math.floor((scene.radius - y) / scene.cell);
+  if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+  return j * scene.g + i;
+}
+=== sun.js ===
+// Sun position (the SunCalc formulas). Not implemented yet.
+
+export function sunPosition(date, lat, lng) {
+  throw new Error('sunPosition is not implemented');
+}
+=== shade.js ===
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// Share of court samples shaded by trees/buildings at `date`, or null when the
+// sun is down. Not implemented yet.
+
+export function shadeAt(scene, date) {
+  throw new Error('shadeAt is not implemented');
+}
+=== package.json ===
+{
+  "name": "rally-court3d",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "test": "node --test"
+  }
+}
+=== test ===
+import test from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { sunPosition } from '../src/sun.js';
+import { shadeAt } from '../src/shade.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+test('sun is up at local midday and down at night (Seattle, June)', () => {
+  const noon = new Date('2026-06-21T20:00:00Z'); // ~13:00 PDT
+  const night = new Date('2026-06-21T08:00:00Z'); // ~01:00 PDT
+  const s = sunPosition(noon, 47.6, -122.3);
+  assert.ok(s.alt > 0.5, 'sun should be high at midday');
+  assert.ok(s.bearing >= 0 && s.bearing < 2 * Math.PI, 'bearing wraps to [0, 2pi)');
+  assert.ok(sunPosition(night, 47.6, -122.3).alt < 0, 'sun below horizon at night');
+});
+
+test('a flat venue with no obstacles is never shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(-32768),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 0);
+});
+
+test('a venue buried in tall obstacles is fully shaded', () => {
+  const scene = {
+    lat: 47.6, lng: -122.3, radius: 110, cell: 2, g: 110,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, AL: 36.6, AW: 18.3, z: 0 }],
+    top: new Array(110 * 110).fill(32767),
+  };
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T20:00:00Z')), 1);
+});
+
+test('the sun is down after dark: shadeAt is null', () => {
+  const scene = JSON.parse(readFileSync(join(here, '..', 'venues', 'kenmore-inglemoor-hs.json'), 'utf8'));
+  assert.strictEqual(shadeAt(scene, new Date('2026-06-21T09:00:00Z')), null);
+});
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && for f in venues/*.json; do echo "=== $f ==="; node -e "
+const s=JSON.parse(require('fs').readFileSync('$f','utf8'));
+const {top,...rest}=s;
+console.log(JSON.stringify(rest,null,1));
+console.log('top len',top.length,'min',Math.min(...top),'max',Math.max(...top));
+console.log('nearest cells nonzero count', top.filter(v=>v>-32768).length);
+"; done
+
+=== venues/bellevue-crossroads-park.json ===
+{
+ "name": "Bellevue - Crossroads Park",
+ "lat": 47.620116,
+ "lng": -122.128019,
+ "radius": 110,
+ "cell": 2,
+ "g": 110,
+ "courts": [
+  {
+   "sport": "tennis",
+   "cx": 8.7,
+   "cy": 2.3,
+   "theta": 1.5708,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": -6.5,
+   "cy": 2.4,
+   "theta": -1.574,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  }
+ ]
+}
+top len 12100 min -32768 max 494
+nearest cells nonzero count 7760
+=== venues/kenmore-inglemoor-hs.json ===
+{
+ "name": "Kenmore - Inglemoor HS",
+ "lat": 47.743365,
+ "lng": -122.22164,
+ "radius": 110,
+ "cell": 2,
+ "g": 110,
+ "courts": [
+  {
+   "sport": "tennis",
+   "cx": 4.3,
+   "cy": -20.2,
+   "theta": 1.7202,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": -1.1,
+   "cy": 16.1,
+   "theta": -1.419,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": 18.8,
+   "cy": -18.2,
+   "theta": 1.7233,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": -10.6,
+   "cy": -22.5,
+   "theta": 1.7233,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": 13.4,
+   "cy": 18.1,
+   "theta": 1.7195,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  },
+  {
+   "sport": "tennis",
+   "cx": -16,
+   "cy": 13.7,
+   "theta": 1.7195,
+   "pl": 23.77,
+   "pw": 10.97,
+   "AL": 36.6,
+   "AW": 18.3,
+   "z": 0
+  }
+ ]
+}
+top len 12100 min -32768 max 370
+nearest cells nonzero count 4034
+=== venues/kirkland-peter-kirk-park.json ===
+{
+ "name": "Kirkland - Peter Kirk Park",
+ "lat": 47.677762,
+ "lng": -122.200954,
+ "radius": 110,
+ "cell": 2,
+ "g": 110,
+ "courts": [
+  {
+   "sport": "pickleball",
+   "cx": 12.6,
+   "cy": -2.5,
+   "theta": 1.9961,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  },
+  {
+   "sport": "pickleball",
+   "cx": 2.5,
+   "cy": -7,
+   "theta": 1.9961,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  },
+  {
+   "sport": "pickleball",
+   "cx": -7.5,
+   "cy": -11.6,
+   "theta": 2.0012,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  },
+  {
+   "sport": "pickleball",
+   "cx": 5.2,
+   "cy": 13.5,
+   "theta": 2.0012,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  },
+  {
+   "sport": "pickleball",
+   "cx": -4.7,
+   "cy": 9,
+   "theta": -1.1404,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  },
+  {
+   "sport": "pickleball",
+   "cx": -14.8,
+   "cy": 4.5,
+   "theta": 1.9961,
+   "pl": 13.41,
+   "pw": 6.1,
+   "AL": 19.4,
+   "AW": 9.1,
+   "z": 0
+  }
+ ]
+}
+top len 12100 min -32768 max 536
+nearest cells nonzero count 5326Now I understand the structure. Let me implement the two modules.
+  ────────────────────────────────────────
+  ▸ write
+    path ~/I/x/r/w/s/g/r/src/sun.js
+    content: // Sun position, using the standard SunCalc formulas (mean anomaly, equation of
+// the centre, ecliptic longitude, declination, right ascension, hour angle).
+
+const DAY_MS = 86400000;
+const J1970 = 2440588; // Julian day of the Unix epoch
+const J2000 = 2451545; // Julian day of the J2000 epoch
+
+const RAD = Math.PI / 180;
+const OBLIQUITY = RAD * 23.4397; // Earth's axial tilt
+const PERIHELION = RAD * 102.9372; // perihelion of the Earth's orbit
+
+const toDays = (date) => date.valueOf() / DAY_MS - 0.5 + J1970 - J2000;
+
+/** Mean anomaly of the sun, radians. */
+const solarMeanAnomaly = (d) => RAD * (357.5291 + 0.98560028 * d);
+
+/** Ecliptic longitude of the sun, radians. */
+function eclipticLongitude(M) {
+  // Equation of the centre: the first three terms are plenty for our accuracy.
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  return M + C + PERIHELION + Math.PI;
+}
+
+/** Declination of a point on the ecliptic, radians (latitude b = 0 for the sun). */
+const declination = (L) => Math.asin(Math.sin(OBLIQUITY) * Math.sin(L));
+
+/** Right ascension of a point on the ecliptic, radians (latitude b = 0). */
+const rightAscension = (L) => Math.atan2(Math.cos(OBLIQUITY) * Math.sin(L), Math.cos(L));
+
+/** Local sidereal time, radians. */
+const siderealTime = (d, lw) => RAD * (280.16 + 360.9856235 * d) - lw;
+
+/**
+ * Where the sun is at `date` as seen from `(lat, lng)` (degrees).
+ *
+ * @returns {{ alt: number, bearing: number }} `alt` is the elevation above the
+ *   horizon in radians (negative below it); `bearing` is the compass bearing
+ *   toward the sun in radians, clockwise from north, in [0, 2pi).
+ */
+export function sunPosition(date, lat, lng) {
+  const lw = RAD * -lng; // longitude, west-positive
+  const phi = RAD * lat;
+  const d = toDays(date);
+
+  const L = eclipticLongitude(solarMeanAnomaly(d));
+  const dec = declination(L);
+  const ra = rightAscension(L);
+
+  // Hour angle: how far the sun has turned since it crossed the meridian.
+  const H = siderealTime(d, lw) - ra;
+
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+
+  // SunCalc's azimuth is measured from south, positive toward the west; adding
+  // half a turn turns it into a compass bearing clockwise from north.
+  const azimuthFromSouth = Math.atan2(
+    Math.sin(H),
+    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi),
+  );
+  let bearing = (azimuthFromSouth + Math.PI) % (2 * Math.PI);
+  if (bearing < 0) bearing += 2 * Math.PI;
+
+  return { alt, bearing };
+}
+
+
+Wrote work/strong/goose/rally-3d-sun-0/src/sun.js (66 lines)
+  ────────────────────────────────────────
+  ▸ write
+    path ~/I/x/r/w/s/g/r/src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// The obstacle grid has no height at all in a cell; the scene format marks it
+// with the minimum int16 value.
+const NO_OBSTACLE = -32768;
+
+// Courtyard sample spacing, in metres along the court's length and across it.
+const SAMPLE_STEP = 1;
+
+// How finely the sun ray is walked across the obstacle grid, as a fraction of
+// a cell. Half a cell cannot skip a whole cell, so no obstacle is stepped over.
+const TRACE_STEPS_PER_CELL = 2;
+
+// Sample points and the tallest obstacle only depend on the scene, not on the
+// time of day, so they are computed once per scene: a forecast calls shadeAt
+// many times with the same venue.
+const sceneCache = new WeakMap();
+
+function prepare(scene) {
+  let prepared = sceneCache.get(scene);
+  if (prepared) return prepared;
+
+  const points = [];
+  let maxTop = -Infinity; // metres
+
+  for (const court of scene.courts ?? []) {
+    // A grid of cell-centre samples covering the pl x pw footprint, in
+    // court-local coordinates: a along the length, b across it.
+    const na = Math.max(2, Math.round(court.pl / SAMPLE_STEP));
+    const nb = Math.max(2, Math.round(court.pw / SAMPLE_STEP));
+    for (let i = 0; i < na; i++) {
+      const a = -court.pl / 2 + ((i + 0.5) * court.pl) / na;
+      for (let j = 0; j < nb; j++) {
+        const b = -court.pw / 2 + ((j + 0.5) * court.pw) / nb;
+        const [x, y] = fromFrame(court, a, b);
+        points.push({ x, y, z: court.z ?? 0 });
+      }
+    }
+  }
+
+  for (const top of scene.top) {
+    if (top !== NO_OBSTACLE && top / 10 > maxTop) maxTop = top / 10;
+  }
+
+  prepared = { points, maxTop };
+  sceneCache.set(scene, prepared);
+  return prepared;
+}
+
+/**
+ * Is the point at `(x, y, z)` in shadow, looking toward the sun?
+ *
+ * The sun's ray climbs `climb` metres per horizontal metre. Walking away from
+ * the point along the sun's bearing, an obstacle blocks it only once its top
+ * rises above the ray; a ray that leaves the venue without meeting one is in
+ * full sun.
+ */
+function inShadow(scene, x, y, z, dx, dy, climb, maxTop) {
+  const step = scene.cell / TRACE_STEPS_PER_CELL;
+
+  for (let t = 0; ; t += step) {
+    const rayHeight = z + t * climb;
+    // Nothing in the scene is tall enough to reach this high: full sun.
+    if (rayHeight > maxTop) return false;
+
+    const cell = cellOf(scene, x + dx * t, y + dy * t);
+    // The venue ends before any obstacle is reached: full sun.
+    if (cell === -1) return false;
+
+    const top = scene.top[cell];
+    if (top !== NO_OBSTACLE && top / 10 > rayHeight) return true;
+  }
+}
+
+/**
+ * Share of the venue's courts that is shaded at `date`.
+ *
+ * @param {object} scene A venue scene (lat, lng, radius, cell, g, courts, top).
+ * @param {Date} date
+ * @returns {number|null} The fraction (0-1) of court sample points in shadow,
+ *   or null when the sun is at or below the horizon.
+ */
+export function shadeAt(scene, date) {
+  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
+  if (!(alt > 0)) return null; // sun down (or a NaN date)
+
+  // Horizontal unit vector toward the sun: +x east, +y north, bearing
+  // measured clockwise from north.
+  const dx = Math.sin(bearing);
+  const dy = Math.cos(bearing);
+  const climb = Math.tan(alt); // metres of rise per horizontal metre
+
+  const { points, maxTop } = prepare(scene);
+
+  let shaded = 0;
+  for (const p of points) {
+    if (inShadow(scene, p.x, p.y, p.z, dx, dy, climb, maxTop)) shaded++;
+  }
+
+  return points.length === 0 ? 0 : shaded / points.length;
+}
+
+
+Wrote work/strong/goose/rally-3d-sun-0/src/shade.js (102 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node --test 2>&1 | tail -20
+
+ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 0.704458
+  type: 'test'
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.489416
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 59.0015Tests pass. Now let me validate the physics against an independent reference implementation (NOAA) rather than just trusting the formulas.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/noaa.py <<'EOF'
+import math, datetime
+def noaa(ts, lat, lon):
+    # ts: unix seconds UTC
+    jd = ts/86400.0 + 2440587.5
+    T = (jd - 2451545.0)/36525.0
+    L0 = (280.46646 + T*(36000.76983 + T*0.0003032)) % 360
+    M = 357.52911 + T*(35999.05029 - 0.0001537*T)
+    e = 0.016708634 - T*(0.000042037 + 0.0000001267*T)
+    C = (math.sin(math.radians(M))*(1.914602 - T*(0.004817 + 0.000014*T))
+         + math.sin(math.radians(2*M))*(0.019993 - 0.000101*T)
+         + math.sin(math.radians(3*M))*0.000289)
+    true_long = L0 + C
+    omega = 125.04 - 1934.136*T
+    app_long = true_long - 0.00569 - 0.00478*math.sin(math.radians(omega))
+    eps0 = 23 + (26 + ((21.448 - T*(46.815 + T*(0.00059 - T*0.001813))))/60)/60
+    eps = eps0 + 0.00256*math.cos(math.radians(omega))
+    dec = math.degrees(math.asin(math.sin(math.radians(eps))*math.sin(math.radians(app_long))))
+    y = math.tan(math.radians(eps/2))**2
+    eot = 4*math.degrees(y*math.sin(2*math.radians(L0)) - 2*e*math.sin(math.radians(M))
+        + 4*e*y*math.sin(math.radians(M))*math.cos(2*math.radians(L0))
+        - 0.5*y*y*math.sin(4*math.radians(L0)) - 1.25*e*e*math.sin(2*math.radians(M)))
+    minutes = (ts/60.0) % 1440
+    tst = (minutes + eot + 4*lon) % 1440
+    ha = tst/4 - 180
+    if ha < -180: ha += 360
+    latr, decr = math.radians(lat), math.radians(dec)
+    zen = math.degrees(math.acos(math.sin(latr)*math.sin(decr) + math.cos(latr)*math.cos(decr)*math.cos(math.radians(ha))))
+    alt = 90 - zen
+    # azimuth from north, clockwise
+    denom = math.cos(latr)*math.sin(math.radians(zen))
+    cosaz = (math.sin(latr)*math.cos(math.radians(zen)) - math.sin(decr))/denom if denom else 0
+    az = math.degrees(math.acos(max(-1,min(1,cosaz))))
+    if ha > 0: az = (360 - az) % 360
+    return alt, az
+
+cases = [
+ ('2026-06-21T20:00:00Z', 47.6, -122.3),
+ ('2026-06-21T14:00:00Z', 47.6, -122.3),
+ ('2026-06-21T08:00:00Z', 47.6, -122.3),
+ ('2026-12-21T20:00:00Z', 47.6, -122.3),
+ ('2026-03-20T18:00:00Z', 47.62, -122.128),
+ ('2026-10-17T21:00:00Z', 47.6778, -122.201),
+ ('2026-01-05T17:30:00Z', 47.7434, -122.2216),
+ ('2026-06-21T04:00:00Z', 47.6, -122.3),
+ ('2026-06-21T10:00:00Z', 0.0, 0.0),
+ ('2026-06-21T03:00:00Z', -33.9, 151.2),
+]
+import json
+out=[]
+for iso, lat, lng in cases:
+    ts = datetime.datetime.strptime(iso, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc).timestamp()
+    a, z = noaa(ts, lat, lng)
+    out.append({'iso': iso, 'lat': lat, 'lng': lng, 'altDeg': a, 'azDeg': z})
+print(json.dumps(out))
+EOF
+python3 /tmp/noaa.py > /tmp/noaa.json && cat > /tmp/cmp.mjs <<'EOF'
+import { sunPosition } from './src/sun.js';
+import { readFileSync } from 'node:fs';
+const ref = JSON.parse(readFileSync('/tmp/noaa.json','utf8'));
+const D = 180/Math.PI;
+for (const r of ref) {
+  const s = sunPosition(new Date(r.iso), r.lat, r.lng);
+  const dAlt = s.alt*D - r.altDeg;
+  let dBear = ((s.bearing*D - r.azDeg) % 360 + 540) % 360 - 180;
+  console.log(r.iso.padEnd(22), `lat ${String(r.lat).padStart(8)}`,
+    'ref alt', r.altDeg.toFixed(2).padStart(7), 'mine', (s.alt*D).toFixed(2).padStart(7), 'd', dAlt.toFixed(3).padStart(7),
+    '| ref az', r.azDeg.toFixed(2).padStart(7), 'mine', (s.bearing*D).toFixed(2).padStart(7), 'd', dBear.toFixed(3).padStart(7));
+}
+EOF
+node /tmp/cmp.mjs
+
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/private/tmp/src/sun.js' imported from /private/tmp/cmp.mjs
+Did you mean to import "../..work/strong/goose/rally-3d-sun-0/src/sun.js"?
+    at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+    at moduleResolve (node:internal/modules/esm/resolve:861:10)
+    at defaultResolve (node:internal/modules/esm/resolve:985:11)
+    at #cachedDefaultResolve (node:internal/modules/esm/loader:731:20)
+    at ModuleLoader.resolve (node:internal/modules/esm/loader:708:38)
+    at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:310:38)
+    at ModuleJob._link (node:internal/modules/esm/module_job:182:49) {
+  code: 'ERR_MODULE_NOT_FOUND',
+  url: 'file:///private/tmp/src/sun.js'
+}
+
+Node.js v22.22.1
+
+Command exited with code 1
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && sed -i '' "s#'./src/sun.js'#'$PWD/src/sun.js'#" /tmp/cmp.mjs && node /tmp/cmp.mjs
+
+2026-06-21T20:00:00Z   lat     47.6 ref alt   65.74 mine   65.74 d  -0.001 | ref az    6.20 mine  173.70 d 167.498
+2026-06-21T14:00:00Z   lat     47.6 ref alt   15.30 mine   15.28 d  -0.026 | ref az  108.17 mine   71.80 d -36.377
+2026-06-21T08:00:00Z   lat     47.6 ref alt  -18.92 mine  -18.92 d   0.002 | ref az  182.66 mine  357.29 d 174.631
+2026-12-21T20:00:00Z   lat     47.6 ref alt   18.94 mine   18.94 d  -0.002 | ref az    1.80 mine  178.16 d 176.359
+2026-03-20T18:00:00Z   lat    47.62 ref alt   34.04 mine   33.82 d  -0.216 | ref az   42.40 mine  137.56 d  95.169
+2026-10-17T21:00:00Z   lat  47.6778 ref alt   30.98 mine   31.17 d   0.188 | ref az  340.94 mine  198.98 d -141.967
+2026-01-05T17:30:00Z   lat  47.7434 ref alt   10.61 mine   10.54 d  -0.068 | ref az   38.14 mine  141.83 d 103.691
+2026-06-21T04:00:00Z   lat     47.6 ref alt    0.59 mine    0.62 d   0.023 | ref az  234.65 mine  305.32 d  70.672
+2026-06-21T10:00:00Z   lat        0 ref alt   52.27 mine   52.24 d  -0.033 | ref az  130.54 mine   49.49 d -81.054
+2026-06-21T03:00:00Z   lat    -33.9 ref alt   30.73 mine   30.74 d   0.010 | ref az  196.86 mine  343.19 d 146.329Altitudes match NOAA within 0.2°. My reference azimuth had a sign bug (it was measuring from south) — let me fix and re-check.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && python3 - <<'EOF'
+import re
+src = open('/tmp/noaa.py').read()
+src = src.replace("cosaz = (math.sin(latr)*math.cos(math.radians(zen)) - math.sin(decr))/denom if denom else 0",
+                  "cosaz = (math.sin(decr) - math.sin(latr)*math.cos(math.radians(zen)))/denom if denom else 0")
+open('/tmp/noaa.py','w').write(src)
+EOF
+python3 /tmp/noaa.py > /tmp/noaa.json && node /tmp/cmp.mjs
+
+2026-06-21T20:00:00Z   lat     47.6 ref alt   65.74 mine   65.74 d  -0.001 | ref az  173.80 mine  173.70 d  -0.095
+2026-06-21T14:00:00Z   lat     47.6 ref alt   15.30 mine   15.28 d  -0.026 | ref az   71.83 mine   71.80 d  -0.030
+2026-06-21T08:00:00Z   lat     47.6 ref alt  -18.92 mine  -18.92 d   0.002 | ref az  357.34 mine  357.29 d  -0.041
+2026-12-21T20:00:00Z   lat     47.6 ref alt   18.94 mine   18.94 d  -0.002 | ref az  178.20 mine  178.16 d  -0.032
+2026-03-20T18:00:00Z   lat    47.62 ref alt   34.04 mine   33.82 d  -0.216 | ref az  137.60 mine  137.56 d  -0.040
+2026-10-17T21:00:00Z   lat  47.6778 ref alt   30.98 mine   31.17 d   0.188 | ref az  199.06 mine  198.98 d  -0.079
+2026-01-05T17:30:00Z   lat  47.7434 ref alt   10.61 mine   10.54 d  -0.068 | ref az  141.86 mine  141.83 d  -0.022
+2026-06-21T04:00:00Z   lat     47.6 ref alt    0.59 mine    0.62 d   0.023 | ref az  305.35 mine  305.32 d  -0.031
+2026-06-21T10:00:00Z   lat        0 ref alt   52.27 mine   52.24 d  -0.033 | ref az   49.46 mine   49.49 d   0.034
+2026-06-21T03:00:00Z   lat    -33.9 ref alt   30.73 mine   30.74 d   0.010 | ref az  343.14 mine  343.19 d   0.044Azimuth and altitude now agree with NOAA to ~0.1° / 0.2°. Now let me validate the shade geometry with hand-computable scenes and a brute-force cross-check.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/geo.mjs <<'EOF'
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+
+const R = 110, CELL = 2, G = 110;
+function scene(blocks, court = { cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, z: 0 }) {
+  const top = new Array(G * G).fill(-32768);
+  for (const b of blocks) {
+    for (let x = b.x0; x <= b.x1; x += CELL) for (let y = b.y0; y <= b.y1; y += CELL) {
+      const i = Math.floor((x + R) / CELL), j = Math.floor((R - y) / CELL);
+      if (i >= 0 && j >= 0 && i < G && j < G) top[j * G + i] = Math.round(b.h * 10);
+    }
+  }
+  return { lat: 47.6, lng: -122.3, radius: R, cell: CELL, g: G, courts: [{ sport: 'tennis', ...court }], top };
+}
+
+const noon = new Date('2026-06-21T20:00:00Z');
+const s = sunPosition(noon, 47.6, -122.3);
+const D = 180 / Math.PI;
+console.log(`noon: alt ${(s.alt*D).toFixed(2)}deg bearing ${(s.bearing*D).toFixed(2)}deg tan ${Math.tan(s.alt).toFixed(3)}`);
+
+// Wall to the SOUTH (sun is due south here), 20 m tall, north face at y=-14.
+const wallSouth = [{ x0: -40, x1: 40, y0: -20, y1: -14, h: 20 }];
+let f = shadeAt(scene(wallSouth), noon);
+const shadowNorth = -14 + 20 / Math.tan(s.alt);
+console.log(`south wall 20m: shadow reaches y=${shadowNorth.toFixed(2)} (court spans -5.48..5.48) -> shade ${f.toFixed(4)}`,
+            `expected ~${((Math.min(shadowNorth,5.485)+5.485)/10.97).toFixed(4)} of the width`);
+
+// Same wall but short: 1 m -> shadow 0.45 m, nowhere near the court.
+console.log(`south wall 1m:   shade ${shadeAt(scene([{ x0:-40,x1:40,y0:-20,y1:-14,h:1 }]), noon)}`);
+
+// Wall to the NORTH: sun is in the south, so it shades nothing.
+console.log(`north wall 40m:  shade ${shadeAt(scene([{ x0:-40,x1:40,y0:14,y1:20,h:40 }]), noon)}`);
+
+// Wall to the EAST at 07:00 local (sun ENE, 15 deg up): shadows point WSW.
+const morning = new Date('2026-06-21T14:00:00Z');
+const sm = sunPosition(morning, 47.6, -122.3);
+const len = 20 / Math.tan(sm.alt);
+console.log(`morning: alt ${(sm.alt*D).toFixed(2)} bearing ${(sm.bearing*D).toFixed(2)} -> 20m wall shadow ${len.toFixed(1)}m long`);
+const eastWall = [{ x0: 30, x1: 36, y0: -40, y1: 40, h: 20 }];
+console.log(`east wall 20m at 30m, morning: shade ${shadeAt(scene(eastWall), morning).toFixed(4)} (shadow reaches ~${(30-len).toFixed(1)}m)`);
+console.log(`east wall 20m at 30m, noon:    shade ${shadeAt(scene(eastWall), noon).toFixed(4)} (sun south: expect ~0)`);
+EOF
+node /tmp/geo.mjs
+
+noon: alt 65.74deg bearing 173.70deg tan 2.218
+south wall 20m: shadow reaches y=-4.98 (court spans -5.48..5.48) -> shade 0.0000 expected ~0.0456 of the width
+south wall 1m:   shade 0
+north wall 40m:  shade 0
+morning: alt 15.28 bearing 71.80 -> 20m wall shadow 73.2m long
+east wall 20m at 30m, morning: shade 1.0000 (shadow reaches ~-43.2m)
+east wall 20m at 30m, noon:    shade 0.0000 (sun south: expect ~0)Direction convention checks out. Let me re-run that knife-edge case with a clearly-scaled wall, and add an exact, independent (analytic ray–cell intersection) reference to cross-check the marching.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/exact.mjs <<'EOF'
+// Independent reference: exact ray/cell slab intersection over every grid cell,
+// no distance sampling at all.
+import { readFileSync } from 'node:fs';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+import { fromFrame } from 'work/strong/goose/rally-3d-sun-0/src/geometry.js';
+
+export function exactShade(scene, date) {
+  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
+  if (!(alt > 0)) return null;
+  const dx = Math.sin(bearing), dy = Math.cos(bearing), k = Math.tan(alt);
+  const R = scene.radius, c = scene.cell, G = scene.g;
+
+  // cell rectangles
+  const cells = [];
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
+    const h = scene.top[j * G + i];
+    if (h === -32768) continue;
+    cells.push({ x0: -R + i * c, x1: -R + (i + 1) * c, y0: R - (j + 1) * c, y1: R - j * c, h: h / 10 });
+  }
+
+  let shaded = 0, total = 0;
+  for (const court of scene.courts) {
+    const na = Math.max(2, Math.round(court.pl)), nb = Math.max(2, Math.round(court.pw));
+    for (let i = 0; i < na; i++) for (let jj = 0; jj < nb; jj++) {
+      const a = -court.pl / 2 + ((i + 0.5) * court.pl) / na;
+      const b = -court.pw / 2 + ((jj + 0.5) * court.pw) / nb;
+      const [x, y] = fromFrame(court, a, b);
+      total++;
+      let hit = false;
+      for (const cell of cells) {
+        if (cell.h <= court.z) continue;              // can never clear even at t=0
+        // slab intersection of ray (x,y)+t(dx,dy) with the cell rectangle
+        let t0 = 0, t1 = Infinity, ok = true;
+        for (const [p, d, lo, hi] of [[x, dx, cell.x0, cell.x1], [y, dy, cell.y0, cell.y1]]) {
+          if (Math.abs(d) < 1e-12) { if (p < lo || p > hi) { ok = false; break; } continue; }
+          let ta = (lo - p) / d, tb = (hi - p) / d;
+          if (ta > tb) [ta, tb] = [tb, ta];
+          t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+          if (t0 > t1) { ok = false; break; }
+        }
+        if (ok && t1 >= t0 && cell.h > court.z + t0 * k) { hit = true; break; }
+      }
+      if (hit) shaded++;
+    }
+  }
+  return total ? shaded / total : 0;
+}
+EOF
+cat > /tmp/cross.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { exactShade } from '/tmp/exact.mjs';
+
+// knife-edge wall with a clear margin
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+const R = 110, CELL = 2, G = 110;
+function scene(blocks) {
+  const top = new Array(G * G).fill(-32768);
+  for (const b of blocks) for (let x = b.x0; x <= b.x1; x += CELL) for (let y = b.y0; y <= b.y1; y += CELL) {
+    const i = Math.floor((x + R) / CELL), j = Math.floor((R - y) / CELL);
+    if (i >= 0 && j >= 0 && i < G && j < G) top[j * G + i] = Math.round(b.h * 10);
+  }
+  return { lat: 47.6, lng: -122.3, radius: R, cell: CELL, g: G,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, z: 0 }], top };
+}
+const noon = new Date('2026-06-21T20:00:00Z');
+const s = sunPosition(noon, 47.6, -122.3);
+const edge = -14 + 30 / Math.tan(s.alt);
+console.log(`south wall 30m: shadow edge y=${edge.toFixed(2)}, continuous expectation ${((edge+5.485)/10.97).toFixed(4)}, got ${shadeAt(scene([{x0:-40,x1:40,y0:-20,y1:-14,h:30}]), noon).toFixed(4)}`);
+
+console.log('\nvenue cross-check (marching vs exact ray/cell intersection):');
+for (const name of ['bellevue-crossroads-park', 'kenmore-inglemoor-hs', 'kirkland-peter-kirk-park']) {
+  const sc = JSON.parse(readFileSync(`work/strong/goose/rally-3d-sun-0/venues/${name}.json`, 'utf8'));
+  const row = [];
+  for (const h of [7, 10, 13, 16, 19, 22, 1]) {
+    const d = new Date(Date.UTC(2026, 6, 21, h));
+    const a = shadeAt(sc, d), b = exactShade(sc, d);
+    row.push(`${String(h).padStart(2)}Z ${a === null ? 'null' : a.toFixed(3)}/${b === null ? 'null' : b.toFixed(3)}`);
+  }
+  console.log(name.padEnd(28), row.join('  '));
+}
+EOF
+node /tmp/cross.mjs
+
+south wall 30m: shadow edge y=-0.48, continuous expectation 0.4565, got 0.3636
+
+venue cross-check (marching vs exact ray/cell intersection):
+bellevue-crossroads-park      7Z null/null  10Z null/null  13Z 1.000/1.000  16Z 0.966/0.966  19Z 0.328/0.345  22Z 0.443/0.464   1Z 1.000/1.000
+kenmore-inglemoor-hs          7Z null/null  10Z null/null  13Z 0.935/0.937  16Z 0.204/0.211  19Z 0.000/0.000  22Z 0.000/0.000   1Z 0.000/0.000
+kirkland-peter-kirk-park      7Z null/null  10Z null/null  13Z 1.000/1.000  16Z 0.000/0.002  19Z 0.000/0.000  22Z 0.000/0.000   1Z 0.000/0.000Found a real flaw via that hand-check: fixed-step marching samples the ray at 1 m marks, so it can miss a cell the ray clips just before rising over it (the 30 m wall gave 4/11 where geometry says 5/11). The exact rule for a heightfield is to test at each cell's **entry** point. Let me replace the marching with proper grid traversal.
+  ────────────────────────────────────────
+  ▸ edit
+    path ~/I/x/r/w/s/g/r/src/shade.js
+    before: /**
+ * Is the point at `(x, y, z)` in shadow, looking toward the sun?
+ *
+ * The sun's ray climbs `climb` metres per horizontal metre. Walking away from
+ * the point along the sun's bearing, an obstacle blocks it only once its top
+ * rises above the ray; a ray that leaves the venue without meeting one is in
+ * full sun.
+ */
+function inShadow(scene, x, y, z, dx, dy, climb, maxTop) {
+  const step = scene.cell / TRACE_STEPS_PER_CELL;
+
+  for (let t = 0; ; t += step) {
+    const rayHeight = z + t * climb;
+    // Nothing in the scene is tall enough to reach this high: full sun.
+    if (rayHeight > maxTop) return false;
+
+    const cell = cellOf(scene, x + dx * t, y + dy * t);
+    // The venue ends before any obstacle is reached: full sun.
+    if (cell === -1) return false;
+
+    const top = scene.top[cell];
+    if (top !== NO_OBSTACLE && top / 10 > rayHeight) return true;
+  }
+}
+    after: /**
+ * Is the point at `(x, y, z)` in shadow, looking toward the sun?
+ *
+ * The ray climbs `climb` metres per horizontal metre, so walking away from the
+ * point along the sun's bearing it only ever gets higher: within one grid cell
+ * (whose obstacle top is a single number) it is lowest where it enters. So the
+ * ray is walked cell by cell, testing each cell on entry, and it is blocked as
+ * soon as a cell's top rises above it there. A ray that leaves the venue
+ * without meeting one is in full sun.
+ */
+function inShadow(scene, x, y, z, dx, dy, climb, maxTop) {
+  const { cell: size, g, radius, top } = scene;
+
+  const start = cellOf(scene, x, y);
+  if (start === -1) return false; // no venue data here, so nothing to hide behind
+  let ci = start % g; // column, east-positive
+  let cj = (start / g) | 0; // row, counted south from the north edge
+
+  // Distance along the ray to the next cell boundary on each axis, how far
+  // apart those boundaries are, and which way the row/column moves. Rows are
+  // numbered downwards, so northward rays walk back through them.
+  const stepI = dx > 0 ? 1 : -1;
+  const stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : size / Math.abs(dx);
+  const deltaJ = dy === 0 ? Infinity : size / Math.abs(dy);
+  let nextI = dx === 0 ? Infinity
+    : dx > 0 ? (ci + 1) * size - (x + radius) : x + radius - ci * size;
+  let nextJ = dy === 0 ? Infinity
+    : dy > 0 ? radius - cj * size - y : y - (radius - (cj + 1) * size);
+
+  let t = 0; // how far along the ray we are, in metres
+  for (;;) {
+    const height = top[cj * g + ci];
+    if (height !== NO_OBSTACLE && height / 10 > z + t * climb) return true;
+
+    // Step into the next cell the ray enters.
+    if (nextI < nextJ) {
+      t = nextI;
+      nextI += deltaI;
+      ci += stepI;
+    } else {
+      t = nextJ;
+      nextJ += deltaJ;
+      cj += stepJ;
+    }
+
+    // The venue ends before any obstacle is reached: full sun.
+    if (ci < 0 || cj < 0 || ci >= g || cj >= g) return false;
+    // Nothing in the venue reaches this high: full sun.
+    if (z + t * climb > maxTop) return false;
+  }
+}
+
+Edited work/strong/goose/rally-3d-sun-0/src/shade.js (24 lines -> 52 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && sed -i '' '/^\/\/ How finely the sun ray is walked/,/^const TRACE_STEPS_PER_CELL = 2;$/d' src/shade.js && head -12 src/shade.js && echo '---' && node --test 2>&1 | tail -6 && node /tmp/geo.mjs && node /tmp/cross.mjs
+
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// The obstacle grid has no height at all in a cell; the scene format marks it
+// with the minimum int16 value.
+const NO_OBSTACLE = -32768;
+
+// Courtyard sample spacing, in metres along the court's length and across it.
+const SAMPLE_STEP = 1;
+
+
+// Sample points and the tallest obstacle only depend on the scene, not on the
+---
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 52.257875
+noon: alt 65.74deg bearing 173.70deg tan 2.218
+south wall 20m: shadow reaches y=-4.98 (court spans -5.48..5.48) -> shade 0.0000 expected ~0.0456 of the width
+south wall 1m:   shade 0
+north wall 40m:  shade 0
+morning: alt 15.28 bearing 71.80 -> 20m wall shadow 73.2m long
+east wall 20m at 30m, morning: shade 1.0000 (shadow reaches ~-43.2m)
+east wall 20m at 30m, noon:    shade 0.0000 (sun south: expect ~0)
+south wall 30m: shadow edge y=-0.48, continuous expectation 0.4565, got 0.4545
+
+venue cross-check (marching vs exact ray/cell intersection):
+bellevue-crossroads-park      7Z null/null  10Z null/null  13Z 1.000/1.000  16Z 0.966/0.966  19Z 0.352/0.345  22Z 0.472/0.464   1Z 1.000/1.000
+kenmore-inglemoor-hs          7Z null/null  10Z null/null  13Z 0.938/0.937  16Z 0.206/0.211  19Z 0.000/0.000  22Z 0.000/0.000   1Z 0.003/0.000
+kirkland-peter-kirk-park      7Z null/null  10Z null/null  13Z 1.000/1.000  16Z 0.000/0.002  19Z 0.000/0.000  22Z 0.000/0.000   1Z 0.000/0.000Exact now: the 30 m wall gives 5/11 = 0.4545, matching continuous geometry. Small residual disagreements with my slab reference remain — let me look at whether those are grazing edge cases or a bookkeeping bug.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/diff.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+import { fromFrame } from 'work/strong/goose/rally-3d-sun-0/src/geometry.js';
+
+// Independent reference: brute-force fine march, testing each newly entered cell
+// at the moment of entry (converges to the exact value as the step shrinks).
+function bruteShade(scene, date, step = 0.02) {
+  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
+  if (!(alt > 0)) return null;
+  const dx = Math.sin(bearing), dy = Math.cos(bearing), k = Math.tan(alt);
+  const { radius: R, cell: c, g, top } = scene;
+  let shaded = 0, total = 0;
+  for (const court of scene.courts) {
+    const na = Math.max(2, Math.round(court.pl)), nb = Math.max(2, Math.round(court.pw));
+    for (let i = 0; i < na; i++) for (let jj = 0; jj < nb; jj++) {
+      const a = -court.pl / 2 + ((i + 0.5) * court.pl) / na;
+      const b = -court.pw / 2 + ((jj + 0.5) * court.pw) / nb;
+      const [x, y] = fromFrame(court, a, b);
+      total++;
+      let prev = -2, blocked = false;
+      for (let t = 0; ; t += step) {
+        const px = x + dx * t, py = y + dy * t;
+        const ci = Math.floor((px + R) / c), cj = Math.floor((R - py) / c);
+        if (ci < 0 || cj < 0 || ci >= g || cj >= g) break;
+        const idx = cj * g + ci;
+        if (idx !== prev) {                       // just entered this cell
+          prev = idx;
+          const h = top[idx];
+          if (h !== -32768 && h / 10 > court.z + t * k) { blocked = true; break; }
+        }
+      }
+      if (blocked) shaded++;
+    }
+  }
+  return total ? shaded / total : 0;
+}
+export { bruteShade };
+EOF
+cat > /tmp/diff2.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { exactShade } from '/tmp/exact.mjs';
+import { bruteShade } from '/tmp/diff.mjs';
+for (const name of ['bellevue-crossroads-park', 'kenmore-inglemoor-hs', 'kirkland-peter-kirk-park']) {
+  const sc = JSON.parse(readFileSync(`work/strong/goose/rally-3d-sun-0/venues/${name}.json`, 'utf8'));
+  for (const h of [13, 16, 19, 22, 0, 1, 2]) {
+    const d = new Date(Date.UTC(2026, 6, 21, h));
+    const mine = shadeAt(sc, d), slab = exactShade(sc, d), brute = bruteShade(sc, d);
+    const f = (v) => (v === null ? 'null' : v.toFixed(4));
+    const flag = mine !== null && Math.abs(mine - brute) > 1e-9 ? '  <-- ' + Math.abs(mine - brute).toFixed(4) : '';
+    console.log(name.slice(0, 22).padEnd(23), String(h).padStart(2) + 'Z', 'dda', f(mine), 'slab', f(slab), 'brute', f(brute), flag);
+  }
+}
+EOF
+time node /tmp/diff2.mjs
+
+bellevue-crossroads-pa  13Z dda 1.0000 slab 1.0000 brute 1.0000 
+bellevue-crossroads-pa  16Z dda 0.9659 slab 0.9659 brute 0.9659 
+bellevue-crossroads-pa  19Z dda 0.3523 slab 0.3447 brute 0.3447   <-- 0.0076
+bellevue-crossroads-pa  22Z dda 0.4716 slab 0.4640 brute 0.4640   <-- 0.0076
+bellevue-crossroads-pa   0Z dda 0.9659 slab 0.9659 brute 0.9659 
+bellevue-crossroads-pa   1Z dda 1.0000 slab 1.0000 brute 1.0000 
+bellevue-crossroads-pa   2Z dda 1.0000 slab 1.0000 brute 1.0000 
+kenmore-inglemoor-hs    13Z dda 0.9375 slab 0.9369 brute 0.9369   <-- 0.0006
+kenmore-inglemoor-hs    16Z dda 0.2064 slab 0.2109 brute 0.2109   <-- 0.0044
+kenmore-inglemoor-hs    19Z dda 0.0000 slab 0.0000 brute 0.0000 
+kenmore-inglemoor-hs    22Z dda 0.0000 slab 0.0000 brute 0.0000 
+kenmore-inglemoor-hs     0Z dda 0.0120 slab 0.0013 brute 0.0013   <-- 0.0107
+kenmore-inglemoor-hs     1Z dda 0.0032 slab 0.0000 brute 0.0000   <-- 0.0032
+kenmore-inglemoor-hs     2Z dda 0.1155 slab 0.1130 brute 0.1130   <-- 0.0025
+kirkland-peter-kirk-pa  13Z dda 1.0000 slab 1.0000 brute 1.0000 
+kirkland-peter-kirk-pa  16Z dda 0.0000 slab 0.0021 brute 0.0021   <-- 0.0021
+kirkland-peter-kirk-pa  19Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa  22Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   0Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   1Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   2Z dda 0.0000 slab 0.0000 brute 0.0000 
+
+real	0m3.225s
+user	0m3.217s
+sys	0m0.040sThere's a systematic bias (DDA reports *more* shade — kenmore 0Z: 0.012 vs 0.001, 9×). Both independent references agree with each other, so this is my bug. Let me pinpoint it.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/debug.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+import { fromFrame } from 'work/strong/goose/rally-3d-sun-0/src/geometry.js';
+
+const sc = JSON.parse(readFileSync('work/strong/goose/rally-3d-sun-0/venues/kenmore-inglemoor-hs.json', 'utf8'));
+const date = new Date(Date.UTC(2026, 6, 21, 0));
+const { alt, bearing } = sunPosition(date, sc.lat, sc.lng);
+const dx = Math.sin(bearing), dy = Math.cos(bearing), k = Math.tan(alt);
+const { radius: R, cell: c, g, top } = sc;
+console.log('alt', (alt * 180 / Math.PI).toFixed(3), 'bearing', (bearing * 180 / Math.PI).toFixed(3), 'dx', dx.toFixed(4), 'dy', dy.toFixed(4));
+
+function dda(x, y, z, log) {
+  const start = (() => { const i = Math.floor((x + R)/c), j = Math.floor((R - y)/c); return (i<0||j<0||i>=g||j>=g) ? -1 : j*g+i; })();
+  if (start === -1) return null;
+  let ci = start % g, cj = (start / g) | 0;
+  const stepI = dx > 0 ? 1 : -1, stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : c / Math.abs(dx), deltaJ = dy === 0 ? Infinity : c / Math.abs(dy);
+  let nextI = dx === 0 ? Infinity : dx > 0 ? (ci+1)*c - (x+R) : x + R - ci*c;
+  let nextJ = dy === 0 ? Infinity : dy > 0 ? R - cj*c - y : y - (R - (cj+1)*c);
+  let t = 0;
+  if (log) console.log(`start cell i=${ci} j=${cj} nextI=${nextI.toFixed(3)} nextJ=${nextJ.toFixed(3)}`);
+  for (;;) {
+    const h = top[cj*g+ci];
+    if (log) console.log(`  cell i=${ci} j=${cj} t=${t.toFixed(3)} h=${h/10} ray=${(z + t*k).toFixed(2)}`);
+    if (h !== -32768 && h/10 > z + t*k) return true;
+    if (nextI < nextJ) { t = nextI; nextI += deltaI; ci += stepI; } else { t = nextJ; nextJ += deltaJ; cj += stepJ; }
+    if (ci < 0 || cj < 0 || ci >= g || cj >= g) return false;
+    if (z + t*k > 400) return false;
+  }
+}
+function brute(x, y, z, step = 0.001) {
+  let prev = -2;
+  for (let t = 0; ; t += step) {
+    const px = x + dx*t, py = y + dy*t;
+    const ci = Math.floor((px + R)/c), cj = Math.floor((R - py)/c);
+    if (ci<0||cj<0||ci>=g||cj>=g) return false;
+    const idx = cj*g+ci;
+    if (idx !== prev) {
+      prev = idx;
+      const h = top[idx];
+      if (h !== -32768 && h/10 > z + t*k) return true;
+    }
+    if (t > 500) return false;
+  }
+}
+
+for (const court of sc.courts) {
+  const na = Math.max(2, Math.round(court.pl)), nb = Math.max(2, Math.round(court.pw));
+  for (let i = 0; i < na; i++) for (let jj = 0; jj < nb; jj++) {
+    const a = -court.pl/2 + ((i+0.5)*court.pl)/na, b = -court.pw/2 + ((jj+0.5)*court.pw)/nb;
+    const [x, y] = fromFrame(court, a, b);
+    const d = dda(x, y, court.z, false), br = brute(x, y, court.z);
+    if (d !== br) {
+      console.log(`\nMISMATCH at court(${court.cx},${court.cy}) sample (${x.toFixed(3)},${y.toFixed(3)}) dda=${d} brute=${br}`);
+      dda(x, y, court.z, true);
+      process.exit(0);
+    }
+  }
+}
+console.log('no mismatches');
+EOF
+node /tmp/debug.mjs
+
+alt 37.688 bearing 259.091 dx -0.9819 dy -0.1893
+
+MISMATCH at court(-1.1,16.1) sample (-3.471,5.217) dda=true brute=false
+start cell i=53 j=52 nextI=0.529 nextJ=1.217
+  cell i=53 j=52 t=0.000 h=-3276.8 ray=0.00
+  cell i=52 j=52 t=0.529 h=-3276.8 ray=0.41
+  cell i=52 j=53 t=1.217 h=-3276.8 ray=0.94
+  cell i=51 j=53 t=2.566 h=-3276.8 ray=1.98
+  cell i=50 j=53 t=4.603 h=-3276.8 ray=3.56
+  cell i=49 j=53 t=6.640 h=-3276.8 ray=5.13
+  cell i=48 j=53 t=8.677 h=-3276.8 ray=6.70
+  cell i=47 j=53 t=10.713 h=-3276.8 ray=8.28
+  cell i=47 j=54 t=11.785 h=-3276.8 ray=9.10
+  cell i=46 j=54 t=12.750 h=-3276.8 ray=9.85
+  cell i=45 j=54 t=14.787 h=-3276.8 ray=11.42
+  cell i=44 j=54 t=16.824 h=-3276.8 ray=13.00
+  cell i=43 j=54 t=18.861 h=-3276.8 ray=14.57
+  cell i=42 j=54 t=20.897 h=-3276.8 ray=16.14
+  cell i=42 j=55 t=22.352 h=-3276.8 ray=17.27
+  cell i=41 j=55 t=22.934 h=-3276.8 ray=17.72
+  cell i=40 j=55 t=24.971 h=-3276.8 ray=19.29
+  cell i=39 j=55 t=27.008 h=-3276.8 ray=20.87
+  cell i=38 j=55 t=29.045 h=-3276.8 ray=22.44
+  cell i=37 j=55 t=31.081 h=-3276.8 ray=24.01
+  cell i=37 j=56 t=32.920 h=26 ray=25.43Found it: `nextI`/`nextJ` were coordinate distances, but they must be ray parameters (divided by |dx| / |dy|) — so the traversal was advancing rows/columns far too early. Fixing:
+  ────────────────────────────────────────
+  ▸ edit
+    path ~/I/x/r/w/s/g/r/src/shade.js
+    before:   const stepI = dx > 0 ? 1 : -1;
+  const stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : size / Math.abs(dx);
+  const deltaJ = dy === 0 ? Infinity : size / Math.abs(dy);
+  let nextI = dx === 0 ? Infinity
+    : dx > 0 ? (ci + 1) * size - (x + radius) : x + radius - ci * size;
+  let nextJ = dy === 0 ? Infinity
+    : dy > 0 ? radius - cj * size - y : y - (radius - (cj + 1) * size);
+    after:   const stepI = dx > 0 ? 1 : -1;
+  const stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : size / Math.abs(dx);
+  const deltaJ = dy === 0 ? Infinity : size / Math.abs(dy);
+  let nextI = Infinity;
+  let nextJ = Infinity;
+  if (dx > 0) nextI = ((ci + 1) * size - (x + radius)) / dx;
+  else if (dx < 0) nextI = (x + radius - ci * size) / -dx;
+  if (dy > 0) nextJ = (radius - cj * size - y) / dy;
+  else if (dy < 0) nextJ = (y - (radius - (cj + 1) * size)) / -dy;
+
+Edited work/strong/goose/rally-3d-sun-0/src/shade.js (8 lines -> 10 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node /tmp/debug.mjs | head -5 && echo "=== full comparison ===" && node /tmp/diff2.mjs && node --test 2>&1 | tail -6
+
+alt 37.688 bearing 259.091 dx -0.9819 dy -0.1893
+
+MISMATCH at court(-1.1,16.1) sample (-3.471,5.217) dda=true brute=false
+start cell i=53 j=52 nextI=0.529 nextJ=1.217
+  cell i=53 j=52 t=0.000 h=-3276.8 ray=0.00
+=== full comparison ===
+bellevue-crossroads-pa  13Z dda 1.0000 slab 1.0000 brute 1.0000 
+bellevue-crossroads-pa  16Z dda 0.9659 slab 0.9659 brute 0.9659 
+bellevue-crossroads-pa  19Z dda 0.3447 slab 0.3447 brute 0.3447 
+bellevue-crossroads-pa  22Z dda 0.4640 slab 0.4640 brute 0.4640 
+bellevue-crossroads-pa   0Z dda 0.9659 slab 0.9659 brute 0.9659 
+bellevue-crossroads-pa   1Z dda 1.0000 slab 1.0000 brute 1.0000 
+bellevue-crossroads-pa   2Z dda 1.0000 slab 1.0000 brute 1.0000 
+kenmore-inglemoor-hs    13Z dda 0.9369 slab 0.9369 brute 0.9369 
+kenmore-inglemoor-hs    16Z dda 0.2109 slab 0.2109 brute 0.2109 
+kenmore-inglemoor-hs    19Z dda 0.0000 slab 0.0000 brute 0.0000 
+kenmore-inglemoor-hs    22Z dda 0.0000 slab 0.0000 brute 0.0000 
+kenmore-inglemoor-hs     0Z dda 0.0013 slab 0.0013 brute 0.0013 
+kenmore-inglemoor-hs     1Z dda 0.0000 slab 0.0000 brute 0.0000 
+kenmore-inglemoor-hs     2Z dda 0.1130 slab 0.1130 brute 0.1130 
+kirkland-peter-kirk-pa  13Z dda 1.0000 slab 1.0000 brute 1.0000 
+kirkland-peter-kirk-pa  16Z dda 0.0021 slab 0.0021 brute 0.0021 
+kirkland-peter-kirk-pa  19Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa  22Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   0Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   1Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   2Z dda 0.0000 slab 0.0000 brute 0.0000 
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 48.994083All three implementations now agree exactly. Let me re-run the geometry checks and add a quantitative test of the height rule by bisecting the obstacle height at the analytic shadow threshold.
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node /tmp/geo.mjs && cat > /tmp/thresh.mjs <<'EOF'
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+const R = 110, CELL = 2, G = 110;
+
+function scene(h, wallY1 = -14) {
+  const top = new Array(G * G).fill(-32768);
+  for (let x = -100; x <= 100; x += CELL) for (let y = wallY1 - 6; y <= wallY1; y += CELL) {
+    const i = Math.floor((x + R) / CELL), j = Math.floor((R - y) / CELL);
+    if (i >= 0 && j >= 0 && i < G && j < G) top[j * G + i] = Math.round(h * 10);
+  }
+  return { lat: 47.6, lng: -122.3, radius: R, cell: CELL, g: G,
+    courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, z: 0 }], top };
+}
+
+// Wall north face at y=-14, court's southernmost sample row at y=-4.9865.
+// First shading appears when the wall's shadow just reaches that row:
+//   h > (y_row - y_face) * tan(alt)
+const date = new Date('2026-06-21T20:00:00Z');
+const s = sunPosition(date, 47.6, -122.3);
+const row = -5.485 + 0.5 * (10.97 / 11);
+const predicted = (row - -14) * Math.tan(s.alt);
+console.log(`sun alt ${(s.alt * 180 / Math.PI).toFixed(2)}deg; southernmost sample row y=${row.toFixed(3)}`);
+console.log(`predicted first-shade wall height = ${predicted.toFixed(3)} m`);
+
+let lo = 1, hi = 30;
+for (let n = 0; n < 40; n++) {
+  const mid = (lo + hi) / 2;
+  if (shadeAt(scene(mid), date) > 0) hi = mid; else lo = mid;
+}
+console.log(`bisected threshold (cell-quantised top) = ${hi.toFixed(3)} m  -> delta ${(hi - predicted).toFixed(3)} m`);
+// cell tops are stored in decimetres, so quantisation of +/- 0.05 m is expected,
+// plus the ray drifts east so it hits the wall slightly sooner/later.
+console.log(`shade at threshold height ${hi.toFixed(3)}m: ${shadeAt(scene(hi + 0.06), date).toFixed(4)}, just below: ${shadeAt(scene(hi - 0.06), date).toFixed(4)}`);
+EOF
+node /tmp/thresh.mjs
+
+noon: alt 65.74deg bearing 173.70deg tan 2.218
+south wall 20m: shadow reaches y=-4.98 (court spans -5.48..5.48) -> shade 0.0000 expected ~0.0456 of the width
+south wall 1m:   shade 0
+north wall 40m:  shade 0
+morning: alt 15.28 bearing 71.80 -> 20m wall shadow 73.2m long
+east wall 20m at 30m, morning: shade 1.0000 (shadow reaches ~-43.2m)
+east wall 20m at 30m, noon:    shade 0.0000 (sun south: expect ~0)
+sun alt 65.74deg; southernmost sample row y=-4.986
+predicted first-shade wall height = 19.996 m
+bisected threshold (cell-quantised top) = 20.150 m  -> delta 0.154 m
+shade at threshold height 20.150m: 0.0909, just below: 0.0000Threshold 20.15 m vs exact 20.12 m (the residual is decimetre quantisation; my quick prediction ignored that the ray's vertical component is |cos(bearing)|). Physics confirmed. Now edge cases and performance:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/edge.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+
+const R = 110, CELL = 2, G = 110;
+const noon = new Date('2026-06-21T20:00:00Z');
+const base = (over = {}) => ({
+  lat: 47.6, lng: -122.3, radius: R, cell: CELL, g: G,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, z: 0 }],
+  top: new Array(G * G).fill(-32768), ...over,
+});
+const flat = new Array(G * G).fill(-32768);
+const uniform = (h) => new Array(G * G).fill(Math.round(h * 10));
+
+console.log('no courts:          ', shadeAt(base({ courts: [], top: uniform(30) }), noon));
+console.log('no courts prop:     ', shadeAt(base({ courts: undefined }), noon));
+console.log('flat, empty grid:   ', shadeAt(base(), noon));
+console.log('court off the grid: ', shadeAt(base({ courts: [{ cx: 500, cy: 500, theta: 0, pl: 10, pw: 5, z: 0 }] }), noon));
+
+// raised court: obstacles below the court surface cannot shade it
+const raised = base({ courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23.77, pw: 10.97, z: 10 }] });
+console.log('raised court, 9m obstacles: ', shadeAt({ ...raised, top: uniform(9) }, noon), '(expect 0)');
+console.log('raised court, 11m obstacles:', shadeAt({ ...raised, top: uniform(11) }, noon), '(expect 1)');
+
+// alt exactly at / below the horizon
+for (const t of ['2026-06-21T04:46:00Z', '2026-06-21T04:47:00Z', '2026-06-21T05:00:00Z']) {
+  const d = new Date(t);
+  console.log(`${t} alt=${(sunPosition(d, 47.6, -122.3).alt * 180 / Math.PI).toFixed(4)}deg ->`,
+    shadeAt(base({ top: uniform(30) }), d));
+}
+
+// a scene with only the sentinel, and one with a single tall cell overhead
+console.log('single tall cell over court:', shadeAt(base({ top: uniform(0).map((_, k) => (k === 55 * G + 55 ? 300 : -32768)) }), noon));
+console.log('values in [0,1] and finite:', (() => {
+  const sc = JSON.parse(readFileSync('work/strong/goose/rally-3d-sun-0/venues/kenmore-inglemoor-hs.json', 'utf8'));
+  let ok = true;
+  for (let h = 0; h < 24; h++) {
+    const v = shadeAt(sc, new Date(Date.UTC(2026, 5, 21, h)));
+    if (v !== null && !(v >= 0 && v <= 1)) ok = false;
+  }
+  return ok;
+})());
+
+// forecast sweep timing
+const sc = JSON.parse(readFileSync('work/strong/goose/rally-3d-sun-0/venues/kirkland-peter-kirk-park.json', 'utf8'));
+const big = JSON.parse(readFileSync('work/strong/goose/rally-3d-sun-0/venues/kenmore-inglemoor-hs.json', 'utf8'));
+const t0 = performance.now();
+let n = 0;
+for (let day = 0; day < 7; day++) for (let slot = 0; slot < 96; slot++) {
+  if (shadeAt(big, new Date(Date.UTC(2026, 5, 21 + day, 0, slot * 15))) !== null) n++;
+}
+const t1 = performance.now();
+console.log(`7 days x 15-min slots on the 6-court venue: ${(t1 - t0).toFixed(0)} ms for 672 calls (${((t1 - t0) / 672).toFixed(2)} ms each, ${n} daytime)`);
+EOF
+node /tmp/edge.mjs
+
+no courts:           0
+no courts prop:      0
+flat, empty grid:    0
+court off the grid:  0
+raised court, 9m obstacles:  0 (expect 0)
+raised court, 11m obstacles: 1 (expect 1)
+2026-06-21T04:46:00Z alt=-5.3499deg -> null
+2026-06-21T04:47:00Z alt=-5.4709deg -> null
+2026-06-21T05:00:00Z alt=-7.0064deg -> null
+single tall cell over court: 0.06818181818181818
+values in [0,1] and finite: true
+7 days x 15-min slots on the 6-court venue: 95 ms for 672 calls (0.14 ms each, 441 daytime)All edge cases behave. Let me precisely check the horizon boundary and run a randomized cross-check against the exact reference (random scenes, random times).
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat > /tmp/rand.mjs <<'EOF'
+import { shadeAt } from 'work/strong/goose/rally-3d-sun-0/src/shade.js';
+import { exactShade } from '/tmp/exact.mjs';
+import { sunPosition } from 'work/strong/goose/rally-3d-sun-0/src/sun.js';
+
+// --- horizon boundary ---
+const R = 110, CELL = 2, G = 110;
+const bury = { lat: 47.6, lng: -122.3, radius: R, cell: CELL, g: G,
+  courts: [{ sport: 'tennis', cx: 0, cy: 0, theta: 0, pl: 23, pw: 11, z: 0 }],
+  top: new Array(G * G).fill(400) };
+let lo = Date.UTC(2026, 5, 21, 11, 0), hi = Date.UTC(2026, 5, 21, 13, 0);
+for (let n = 0; n < 60; n++) {
+  const mid = (lo + hi) / 2;
+  if (shadeAt(bury, new Date(mid)) === null) lo = mid; else hi = mid;
+}
+console.log(`sunrise bisected at ${new Date(hi).toISOString()} alt=${(sunPosition(new Date(hi), 47.6, -122.3).alt * 180 / Math.PI).toExponential(3)}deg`);
+console.log(`  1s before: ${shadeAt(bury, new Date(hi - 1000))}   1s after: ${shadeAt(bury, new Date(hi + 1000))}`);
+
+// --- randomised cross-check against exact ray/cell intersection ---
+let seed = 12345;
+const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+let worst = 0, worstCase = null, cases = 0;
+for (let n = 0; n < 120; n++) {
+  const top = new Array(G * G).fill(-32768);
+  const nBlocks = 1 + Math.floor(rnd() * 6);
+  for (let b = 0; b < nBlocks; b++) {
+    const x0 = -100 + rnd() * 200, y0 = -100 + rnd() * 200;
+    const w = 2 + rnd() * 40, d = 2 + rnd() * 40, h = 1 + rnd() * 30;
+    for (let x = x0; x < x0 + w; x += CELL) for (let y = y0; y < y0 + d; y += CELL) {
+      const i = Math.floor((x + R) / CELL), j = Math.floor((R - y) / CELL);
+      if (i >= 0 && j >= 0 && i < G && j < G) top[j * G + i] = Math.max(top[j * G + i], Math.round(h * 10));
+    }
+  }
+  const courts = [];
+  const nCourts = 1 + Math.floor(rnd() * 3);
+  for (let k = 0; k < nCourts; k++) {
+    const pickle = rnd() < 0.5;
+    courts.push({ sport: 'x', cx: -60 + rnd() * 120, cy: -60 + rnd() * 120, theta: rnd() * 2 * Math.PI,
+      pl: pickle ? 13.41 : 23.77, pw: pickle ? 6.1 : 10.97, z: rnd() < 0.3 ? rnd() * 4 : 0 });
+  }
+  const scene = { lat: 40 + rnd() * 20, lng: -130 + rnd() * 40, radius: R, cell: CELL, g: G, courts, top };
+  const date = new Date(Date.UTC(2026, Math.floor(rnd() * 12), 1 + Math.floor(rnd() * 28), Math.floor(rnd() * 24), Math.floor(rnd() * 60)));
+  const a = shadeAt(scene, date), b = exactShade(scene, date);
+  cases++;
+  if (a === null || b === null) { if (a !== b) console.log('NULL MISMATCH', a, b); continue; }
+  const d = Math.abs(a - b);
+  if (d > worst) { worst = d; worstCase = { date: date.toISOString(), courts: courts.length, a, b }; }
+}
+console.log(`\n${cases} random scenes: worst |dda - exact| = ${worst.toExponential(2)}`, worst > 1e-12 ? JSON.stringify(worstCase) : '(exact agreement)');
+EOF
+node /tmp/rand.mjs
+
+sunrise bisected at 2026-06-21T12:17:48.604Z alt=1.593e-6deg
+  1s before: null   1s after: 1
+
+120 random scenes: worst |dda - exact| = 0.00e+0 (exact agreement)120 random scenes agree exactly with the independent reference, and the horizon cut is at alt = 0. Now let me simplify — the scene cache is a staleness hazard (a caller mutating `scene.top` between calls would get stale results) for no real speed benefit.
+  ────────────────────────────────────────
+  ▸ write
+    path ~/I/x/r/w/s/g/r/src/shade.js
+    content: import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// A cell with no obstacle at all is marked with the minimum int16 value.
+const NO_OBSTACLE = -32768;
+
+// Spacing of the sample grid that covers each court, in metres.
+const SAMPLE_STEP = 1;
+
+/** Tallest obstacle anywhere in the venue, in metres (may be -Infinity). */
+function tallest(top) {
+  let max = -Infinity;
+  for (const height of top) {
+    if (height !== NO_OBSTACLE && height / 10 > max) max = height / 10;
+  }
+  return max;
+}
+
+/**
+ * Is the point at `(x, y, z)` in shadow, looking toward the sun?
+ *
+ * The sun's ray climbs `climb` metres per horizontal metre, so walking away
+ * from the point along the sun's bearing it only ever gets higher. Within one
+ * grid cell the obstacle top is a single number, so the ray is lowest where it
+ * enters the cell: that is where an obstacle either blocks it or does not.
+ * The ray is therefore walked cell by cell, and it is in shadow as soon as a
+ * cell's top rises above it on entry. A ray that leaves the venue without
+ * meeting one is in full sun.
+ */
+function inShadow(scene, x, y, z, dx, dy, climb, maxTop) {
+  const { cell: size, g, radius, top } = scene;
+
+  const start = cellOf(scene, x, y);
+  if (start === -1) return false; // no venue data here, so nothing to hide behind
+  let ci = start % g; // column, east-positive
+  let cj = (start / g) | 0; // row, counted south from the north edge
+
+  // Which way the ray moves through the grid (rows are numbered downwards),
+  // how far apart the cell boundaries are along the ray, and where it crosses
+  // the next one on each axis.
+  const stepI = dx > 0 ? 1 : -1;
+  const stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : size / Math.abs(dx);
+  const deltaJ = dy === 0 ? Infinity : size / Math.abs(dy);
+  let nextI = Infinity;
+  let nextJ = Infinity;
+  if (dx > 0) nextI = ((ci + 1) * size - (x + radius)) / dx;
+  else if (dx < 0) nextI = (x + radius - ci * size) / -dx;
+  if (dy > 0) nextJ = (radius - cj * size - y) / dy;
+  else if (dy < 0) nextJ = (y - (radius - (cj + 1) * size)) / -dy;
+
+  let t = 0; // distance along the ray, in metres
+  for (;;) {
+    const height = top[cj * g + ci];
+    if (height !== NO_OBSTACLE && height / 10 > z + t * climb) return true;
+
+    // Step into the next cell the ray enters.
+    if (nextI < nextJ) {
+      t = nextI;
+      nextI += deltaI;
+      ci += stepI;
+    } else {
+      t = nextJ;
+      nextJ += deltaJ;
+      cj += stepJ;
+    }
+
+    // The venue ends before any obstacle is reached: full sun.
+    if (ci < 0 || cj < 0 || ci >= g || cj >= g) return false;
+    // Nothing in the venue reaches this high: full sun.
+    if (z + t * climb > maxTop) return false;
+  }
+}
+
+/**
+ * Share of the venue's courts that is in shadow at `date`.
+ *
+ * @param {object} scene A venue scene (lat, lng, radius, cell, g, courts, top).
+ * @param {Date} date
+ * @returns {number|null} The fraction (0-1) of court sample points in shadow,
+ *   or null when the sun is at or below the horizon.
+ */
+export function shadeAt(scene, date) {
+  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
+  if (!(alt > 0)) return null; // sun down (or an unreadable date)
+
+  // Horizontal unit vector toward the sun, with +x east and +y north and the
+  // bearing measured clockwise from north, plus the ray's climb per metre.
+  const dx = Math.sin(bearing);
+  const dy = Math.cos(bearing);
+  const climb = Math.tan(alt);
+  const maxTop = tallest(scene.top);
+
+  let shaded = 0;
+  let total = 0;
+  for (const court of scene.courts ?? []) {
+    const z = court.z ?? 0;
+    // A grid of cell-centre samples over the pl x pw footprint, in court-local
+    // coordinates: a along the length, b across it.
+    const na = Math.max(2, Math.round(court.pl / SAMPLE_STEP));
+    const nb = Math.max(2, Math.round(court.pw / SAMPLE_STEP));
+    for (let i = 0; i < na; i++) {
+      const a = -court.pl / 2 + ((i + 0.5) * court.pl) / na;
+      for (let j = 0; j < nb; j++) {
+        const b = -court.pw / 2 + ((j + 0.5) * court.pw) / nb;
+        const [x, y] = fromFrame(court, a, b);
+        total++;
+        if (inShadow(scene, x, y, z, dx, dy, climb, maxTop)) shaded++;
+      }
+    }
+  }
+
+  return total === 0 ? 0 : shaded / total;
+}
+
+
+Wrote work/strong/goose/rally-3d-sun-0/src/shade.js (114 lines)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node --test 2>&1 | tail -8 && echo "=== per-call perf ===" && node -e "
+import('./src/shade.js').then(async ({shadeAt}) => {
+  const {readFileSync} = await import('node:fs');
+  const sc = JSON.parse(readFileSync('venues/kenmore-inglemoor-hs.json','utf8'));
+  shadeAt(sc, new Date()); // warm
+  const t0 = performance.now();
+  let n = 0;
+  for (let day = 0; day < 7; day++) for (let slot = 0; slot < 96; slot++)
+    if (shadeAt(sc, new Date(Date.UTC(2026,5,21+day,0,slot*15))) !== null) n++;
+  const t1 = performance.now();
+  console.log('672 calls in', (t1-t0).toFixed(0), 'ms =', ((t1-t0)/672).toFixed(2), 'ms/call,', n, 'daytime');
+});
+" && echo "=== mutation safety ===" && node -e "
+import('./src/shade.js').then(({shadeAt}) => {
+  const R=110, C=2, G=110;
+  const sc = { lat:47.6, lng:-122.3, radius:R, cell:C, g:G,
+    courts:[{sport:'tennis',cx:0,cy:0,theta:0,pl:23.77,pw:10.97,z:0}],
+    top:new Array(G*G).fill(-32768) };
+  const noon = new Date('2026-06-21T20:00:00Z');
+  const a = shadeAt(sc, noon);
+  sc.top.fill(400);
+  const b = shadeAt(sc, noon);
+  console.log('before', a, 'after filling top:', b);
+});
+"
+
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 54.808167
+=== per-call perf ===
+672 calls in 125 ms = 0.19 ms/call, 441 daytime
+=== mutation safety ===
+before 0 after filling top: 1
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node /tmp/rand.mjs && node /tmp/diff2.mjs | tail -8 && node /tmp/geo.mjs && node /tmp/thresh.mjs | tail -3 && node /tmp/edge.mjs | head -8
+
+sunrise bisected at 2026-06-21T12:17:48.604Z alt=1.593e-6deg
+  1s before: null   1s after: 1
+
+120 random scenes: worst |dda - exact| = 0.00e+0 (exact agreement)
+kenmore-inglemoor-hs     2Z dda 0.1130 slab 0.1130 brute 0.1130 
+kirkland-peter-kirk-pa  13Z dda 1.0000 slab 1.0000 brute 1.0000 
+kirkland-peter-kirk-pa  16Z dda 0.0021 slab 0.0021 brute 0.0021 
+kirkland-peter-kirk-pa  19Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa  22Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   0Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   1Z dda 0.0000 slab 0.0000 brute 0.0000 
+kirkland-peter-kirk-pa   2Z dda 0.0000 slab 0.0000 brute 0.0000 
+noon: alt 65.74deg bearing 173.70deg tan 2.218
+south wall 20m: shadow reaches y=-4.98 (court spans -5.48..5.48) -> shade 0.0000 expected ~0.0456 of the width
+south wall 1m:   shade 0
+north wall 40m:  shade 0
+morning: alt 15.28 bearing 71.80 -> 20m wall shadow 73.2m long
+east wall 20m at 30m, morning: shade 1.0000 (shadow reaches ~-43.2m)
+east wall 20m at 30m, noon:    shade 0.0000 (sun south: expect ~0)
+predicted first-shade wall height = 19.996 m
+bisected threshold (cell-quantised top) = 20.150 m  -> delta 0.154 m
+shade at threshold height 20.150m: 0.0909, just below: 0.0000
+no courts:           0
+no courts prop:      0
+flat, empty grid:    0
+court off the grid:  0
+raised court, 9m obstacles:  0 (expect 0)
+raised court, 11m obstacles: 1 (expect 1)
+2026-06-21T04:46:00Z alt=-5.3499deg -> null
+2026-06-21T04:47:00Z alt=-5.4709deg -> null
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && node -e "
+Promise.all([import('./src/shade.js'), import('./src/sun.js'), import('node:fs')]).then(([{shadeAt},{sunPosition},fs]) => {
+  for (const name of ['bellevue-crossroads-park','kenmore-inglemoor-hs','kirkland-peter-kirk-park']) {
+    const sc = JSON.parse(fs.readFileSync('venues/'+name+'.json','utf8'));
+    const marks = [];
+    for (let h = 11; h <= 24; h++) { // PDT hours 4am-5pm
+      const d = new Date(Date.UTC(2026,5,21,h+7));
+      const v = shadeAt(sc, d);
+      marks.push(h.toString().padStart(2)+'h '+ (v===null?'  -  ':String(Math.round(v*100)).padStart(3)+'%'));
+    }
+    console.log(name.padEnd(27), marks.join(' '));
+  }
+});
+" && echo && git status --short 2>/dev/null; git diff --stat 2>/dev/null | tail -3
+
+bellevue-crossroads-park    11h  39% 12h  28% 13h  14% 14h  23% 15h  45% 16h  60% 17h  93% 18h 100% 19h 100% 20h 100% 21h 100% 22h   -   23h   -   24h   -  
+kenmore-inglemoor-hs        11h   0% 12h   0% 13h   0% 14h   0% 15h   0% 16h   2% 17h   0% 18h   1% 19h  12% 20h  60% 21h 100% 22h   -   23h   -   24h   -  
+kirkland-peter-kirk-park    11h   0% 12h   0% 13h   0% 14h   0% 15h   0% 16h   0% 17h   0% 18h   0% 19h   0% 20h  94% 21h 100% 22h   -   23h   -   24h   -  
+
+ M src/shade.js
+ M src/sun.js
+ src/shade.js | 111 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ src/sun.js   |  65 ++++++++++++++++++++++++++++++++--
+ 2 files changed, 171 insertions(+), 5 deletions(-)
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd work/strong/goose/rally-3d-sun-0 && cat src/sun.js && echo "=================" && sed -n '1,60p' src/shade.js
+
+// Sun position, using the standard SunCalc formulas (mean anomaly, equation of
+// the centre, ecliptic longitude, declination, right ascension, hour angle).
+
+const DAY_MS = 86400000;
+const J1970 = 2440588; // Julian day of the Unix epoch
+const J2000 = 2451545; // Julian day of the J2000 epoch
+
+const RAD = Math.PI / 180;
+const OBLIQUITY = RAD * 23.4397; // Earth's axial tilt
+const PERIHELION = RAD * 102.9372; // perihelion of the Earth's orbit
+
+const toDays = (date) => date.valueOf() / DAY_MS - 0.5 + J1970 - J2000;
+
+/** Mean anomaly of the sun, radians. */
+const solarMeanAnomaly = (d) => RAD * (357.5291 + 0.98560028 * d);
+
+/** Ecliptic longitude of the sun, radians. */
+function eclipticLongitude(M) {
+  // Equation of the centre: the first three terms are plenty for our accuracy.
+  const C = RAD * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  return M + C + PERIHELION + Math.PI;
+}
+
+/** Declination of a point on the ecliptic, radians (latitude b = 0 for the sun). */
+const declination = (L) => Math.asin(Math.sin(OBLIQUITY) * Math.sin(L));
+
+/** Right ascension of a point on the ecliptic, radians (latitude b = 0). */
+const rightAscension = (L) => Math.atan2(Math.cos(OBLIQUITY) * Math.sin(L), Math.cos(L));
+
+/** Local sidereal time, radians. */
+const siderealTime = (d, lw) => RAD * (280.16 + 360.9856235 * d) - lw;
+
+/**
+ * Where the sun is at `date` as seen from `(lat, lng)` (degrees).
+ *
+ * @returns {{ alt: number, bearing: number }} `alt` is the elevation above the
+ *   horizon in radians (negative below it); `bearing` is the compass bearing
+ *   toward the sun in radians, clockwise from north, in [0, 2pi).
+ */
+export function sunPosition(date, lat, lng) {
+  const lw = RAD * -lng; // longitude, west-positive
+  const phi = RAD * lat;
+  const d = toDays(date);
+
+  const L = eclipticLongitude(solarMeanAnomaly(d));
+  const dec = declination(L);
+  const ra = rightAscension(L);
+
+  // Hour angle: how far the sun has turned since it crossed the meridian.
+  const H = siderealTime(d, lw) - ra;
+
+  const alt = Math.asin(
+    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
+  );
+
+  // SunCalc's azimuth is measured from south, positive toward the west; adding
+  // half a turn turns it into a compass bearing clockwise from north.
+  const azimuthFromSouth = Math.atan2(
+    Math.sin(H),
+    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi),
+  );
+  let bearing = (azimuthFromSouth + Math.PI) % (2 * Math.PI);
+  if (bearing < 0) bearing += 2 * Math.PI;
+
+  return { alt, bearing };
+}
+=================
+import { sunPosition } from './sun.js';
+import { fromFrame, cellOf } from './geometry.js';
+
+// A cell with no obstacle at all is marked with the minimum int16 value.
+const NO_OBSTACLE = -32768;
+
+// Spacing of the sample grid that covers each court, in metres.
+const SAMPLE_STEP = 1;
+
+/** Tallest obstacle anywhere in the venue, in metres (may be -Infinity). */
+function tallest(top) {
+  let max = -Infinity;
+  for (const height of top) {
+    if (height !== NO_OBSTACLE && height / 10 > max) max = height / 10;
+  }
+  return max;
+}
+
+/**
+ * Is the point at `(x, y, z)` in shadow, looking toward the sun?
+ *
+ * The sun's ray climbs `climb` metres per horizontal metre, so walking away
+ * from the point along the sun's bearing it only ever gets higher. Within one
+ * grid cell the obstacle top is a single number, so the ray is lowest where it
+ * enters the cell: that is where an obstacle either blocks it or does not.
+ * The ray is therefore walked cell by cell, and it is in shadow as soon as a
+ * cell's top rises above it on entry. A ray that leaves the venue without
+ * meeting one is in full sun.
+ */
+function inShadow(scene, x, y, z, dx, dy, climb, maxTop) {
+  const { cell: size, g, radius, top } = scene;
+
+  const start = cellOf(scene, x, y);
+  if (start === -1) return false; // no venue data here, so nothing to hide behind
+  let ci = start % g; // column, east-positive
+  let cj = (start / g) | 0; // row, counted south from the north edge
+
+  // Which way the ray moves through the grid (rows are numbered downwards),
+  // how far apart the cell boundaries are along the ray, and where it crosses
+  // the next one on each axis.
+  const stepI = dx > 0 ? 1 : -1;
+  const stepJ = dy > 0 ? -1 : 1;
+  const deltaI = dx === 0 ? Infinity : size / Math.abs(dx);
+  const deltaJ = dy === 0 ? Infinity : size / Math.abs(dy);
+  let nextI = Infinity;
+  let nextJ = Infinity;
+  if (dx > 0) nextI = ((ci + 1) * size - (x + radius)) / dx;
+  else if (dx < 0) nextI = (x + radius - ci * size) / -dx;
+  if (dy > 0) nextJ = (radius - cj * size - y) / dy;
+  else if (dy < 0) nextJ = (y - (radius - (cj + 1) * size)) / -dy;
+
+  let t = 0; // distance along the ray, in metres
+  for (;;) {
+    const height = top[cj * g + ci];
+    if (height !== NO_OBSTACLE && height / 10 > z + t * climb) return true;
+
+    // Step into the next cell the ray enters.
+    if (nextI < nextJ) {
+      t = nextI;
+      nextI += deltaI;Both modules are implemented and the visible tests pass, with the test file untouched.
+
+## What I wrote
+
+**`src/sun.js` — `sunPosition(date, lat, lng)`**
+The SunCalc chain: days since J2000 → mean anomaly → ecliptic longitude (equation of the centre) → declination/right ascension → sidereal time → hour angle → `alt` and `bearing`. SunCalc's azimuth is measured from south, so I add π and normalise to `[0, 2π)` for a compass bearing clockwise from north.
+
+**`src/shade.js` — `shadeAt(scene, date)`**
+- `alt <= 0` → `null`.
+- Each court gets a 1 m grid of cell-centre samples over its `pl`×`pw` footprint (via `fromFrame`), pooled across courts; the result is shaded samples ÷ all samples, so a bigger court carries proportionally more weight.
+- For each sample the sun ray is walked **cell by cell** (grid traversal, seeded by `cellOf`), testing each cell at its **entry point**: within a cell the obstacle top is one number and the ray only climbs, so entry is exactly where a cell blocks or doesn't. The walk ends at the venue edge or once the ray is above the tallest obstacle.
+
+That entry-point rule replaced my first attempt (fixed 1 m marching), which a hand-checked case caught under-reporting: a 30 m wall gave 4/11 rows shaded where geometry says 5/11, because a ray can clip a cell just before stepping past it. Traversal now gives exactly 5/11 (0.4545 vs 0.4565 continuous).
+
+## Validation
+
+- **Sun position vs. NOAA**: altitude within 0.22°, bearing within 0.1° across 10 cases (Seattle solstices/equinox, equator, Sydney, night, near-horizon). One caveat I hit: my *first* NOAA reference had a south-from-north sign error — worth knowing because a plausible-looking 180° offset is the classic bug here.
+- **Shade vs. two independent implementations** (exact ray/cell slab intersection, and a 2 cm brute-force march): exact agreement on all 21 venue-hours and on **120 random scenes** (random blocks, courts, rotations, elevations, dates, hemispheres), worst delta 0.
+- **Hand-computable geometry**: wall south of the court shades at noon but not a wall north of it; east wall shades at 07:00 (sun 71.8°, 73 m shadows) and not at noon; a 1 m wall casts nothing. Bisecting wall height put the shading threshold at 20.15 m against an analytic 20.12 m (residual is the decimetre storage quantisation).
+- **Edge cases**: raised courts (obstacles below court `z` don't shade), courts outside the grid, scenes with no `courts`, all-sentinel grids, values in `[0,1]`, and the horizon cut bisected to `alt = 0` exactly (null 1 s before sunrise, shaded 1 s after).
+- **Cost**: 0.19 ms per call, so a season of 15-minute slots for a six-court venue is a couple of seconds.
+
+Two judgement calls worth flagging: I dropped a scene-level cache I'd added (it made `shadeAt` return stale results if a caller mutated `scene.top` between calls — worth 0.05 ms, not worth the trap), and the sample grid uses `pl`/`pw` as the README specifies, with `AL`/`AW` unused.
+
+A day's output looks right, e.g. Bellevue 39% at 11h → 14% near solar noon → 100% from 18h as the sun drops into the trees, while open Kenmore stays near 0% until the evening.

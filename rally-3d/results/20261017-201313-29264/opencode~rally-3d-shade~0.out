@@ -1,0 +1,2193 @@
+[0m
+> build · bench-model
+I'll start by exploring the codebase to understand the structure and current implementations.
+[0m→ [0mRead . 
+[0m→ [0mRead README.md 
+> build · bench-model
+[0m→ [0mRead reference/viewer-shade.ts 
+[0m→ [0mRead src/geometry.js 
+[0m→ [0mRead src/shade.js 
+[0m→ [0mRead src/sun.js 
+[0m→ [0mRead reference/sun.ts 
+> build · bench-model
+[0m→ [0mRead test/shade.test.js 
+> build · bench-model
+Now I understand the structure. Let me implement both files:
+
+1. **src/sun.js** - Port the SunCalc formulas from reference/sun.ts
+2. **src/shade.js** - Port the shade tracing from reference/viewer-shade.ts
+[0m← [0mEdit src/sun.js
+Index: src/sun.js
+===================================================================
+--- src/sun.js
++++ src/sun.js
+@@ -1,6 +1,21 @@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+-// Port reference/sun.ts. Not implemented yet.
++// Port reference/sun.ts.
+ 
+-export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++function sunPosition(date, lat, lng) {
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = (Math.PI / 180) * (357.5291 + 0.98560028 * d);
++  const C = (Math.PI / 180) * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + (Math.PI / 180) * 102.9372 + Math.PI;
++  const e = (Math.PI / 180) * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = (Math.PI / 180) * (280.16 + 360.9856235 * d) + (Math.PI / 180) * lng - ra;
++  const phi = (Math.PI / 180) * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }
++
++export { sunPosition };
+
+> build · bench-model
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -1,9 +1,49 @@
+ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+ // Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
++// sun is down. Port the trace in reference/viewer-shade.ts.
+ 
+-export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++function shadeAt(scene, date) {
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++  let shaded = 0;
++  let n = 0;
++
++  // Find maxTop - the tallest obstacle in the venue
++  let maxTop = -32768;
++  for (const t of scene.top) {
++    if (t > maxTop) maxTop = t;
++  }
++
++  // For each court, generate samples
++  for (let ci = 0; ci < scene.courts.length; ci++) {
++    const f = scene.courts[ci];
++    const h0 = f.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
++      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
++        const [px0, py0] = fromFrame(f, a, b);
++        n++;
++
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const c = cellOf(px0 + ex * d, py0 + ny * d);
++          if (c < 0) break;
++          if (scene.top[c] !== -32768 && scene.top[c] / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return n ? shaded / n : 0;
+ }
++
++export { shadeAt };
+
+> build · bench-model
+Now let me run the tests to verify the implementation:
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test test/shade.test.js
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.036041
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 1.086209
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 6.080375
+  type: 'test'
+  location: 'work/weak/opencode/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://work/weak/opencode/rally-3d-shade-0/test/shade.test.js:35:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.531542
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 58.249209
+> build · bench-model
+One test is failing - "a venue buried in tall obstacles is fully shaded". Let me debug this by adding some logging:
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -19,23 +19,39 @@
+   for (const t of scene.top) {
+     if (t > maxTop) maxTop = t;
+   }
+ 
++  console.log('sunPosition:', s);
++  console.log('maxTop:', maxTop);
++  console.log('rise:', rise);
++  console.log('court[0]:', scene.courts[0]);
++  console.log('grid size:', scene.g, scene.radius);
++
+   // For each court, generate samples
+   for (let ci = 0; ci < scene.courts.length; ci++) {
+     const f = scene.courts[ci];
+     const h0 = f.z + 1;
+     const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+ 
++    console.log('h0:', h0, 'maxD:', maxD);
++
+     for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+       for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+         const [px0, py0] = fromFrame(f, a, b);
++
++        console.log('curr:', a, b, 'px0:', px0, 'py0:', py0);
++        console.log('court 0 maxTop for sample:', maxTop);
+         n++;
+ 
++        console.log('tracing...');
+         for (let d = 0.5; d < maxD; d += 0.5) {
+           const c = cellOf(px0 + ex * d, py0 + ny * d);
++          const hObs = scene.top[c] / 10;
++          const hReq = h0 + d * rise;
+           if (c < 0) break;
+-          if (scene.top[c] !== -32768 && scene.top[c] / 10 > h0 + d * rise) {
++          console.log(d, c, hObs, hReq, hObs > hReq);
++          if (scene.top[c] !== -32768 && hObs > hReq) {
++            console.log('SHADOWED at d:', d);
+             shaded++;
+             break;
+           }
+         }
+
+> build · bench-model
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test --test-name-pattern="fully shaded" test/shade.test.js 2>&1
+338 false
+# 17.5 NaN NaN 39.821951472194655 false
+# 18 NaN NaN 40.931150085685935 false
+# 18.5 NaN NaN 42.04034869917721 false
+# 19 NaN NaN 43.14954731266848 false
+# 19.5 NaN NaN 44.25874592615976 false
+# 20 NaN NaN 45.367944539651035 false
+# 20.5 NaN NaN 46.477143153142315 false
+# 21 NaN NaN 47.58634176663359 false
+# 21.5 NaN NaN 48.69554038012486 false
+# 22 NaN NaN 49.80473899361614 false
+# 22.5 NaN NaN 50.913937607107414 false
+# 23 NaN NaN 52.023136220598694 false
+# 23.5 NaN NaN 53.13233483408997 false
+# 24 NaN NaN 54.24153344758125 false
+# 24.5 NaN NaN 55.35073206107252 false
+# 25 NaN NaN 56.45993067456379 false
+# 25.5 NaN NaN 57.56912928805507 false
+# 26 NaN NaN 58.678327901546346 false
+# 26.5 NaN NaN 59.78752651503763 false
+# 27 NaN NaN 60.8967251285289 false
+# 27.5 NaN NaN 62.00592374202017 false
+# 28 NaN NaN 63.11512235551145 false
+# 28.5 NaN NaN 64.22432096900272 false
+# 29 NaN NaN 65.333519582494 false
+# 29.5 NaN NaN 66.44271819598528 false
+# 30 NaN NaN 67.55191680947655 false
+# 30.5 NaN NaN 68.66111542296782 false
+# 31 NaN NaN 69.77031403645911 false
+# 31.5 NaN NaN 70.87951264995039 false
+# 32 NaN NaN 71.98871126344166 false
+# 32.5 NaN NaN 73.09790987693293 false
+# 33 NaN NaN 74.2071084904242 false
+# 33.5 NaN NaN 75.31630710391549 false
+# 34 NaN NaN 76.42550571740676 false
+# 34.5 NaN NaN 77.53470433089804 false
+# 35 NaN NaN 78.64390294438931 false
+# 35.5 NaN NaN 79.75310155788058 false
+# 36 NaN NaN 80.86230017137187 false
+# 36.5 NaN NaN 81.97149878486314 false
+# 37 NaN NaN 83.08069739835442 false
+# 37.5 NaN NaN 84.18989601184569 false
+# 38 NaN NaN 85.29909462533696 false
+# 38.5 NaN NaN 86.40829323882825 false
+# 39 NaN NaN 87.51749185231952 false
+# 39.5 NaN NaN 88.6266904658108 false
+# 40 NaN NaN 89.73588907930207 false
+# 40.5 NaN NaN 90.84508769279334 false
+# 41 NaN NaN 91.95428630628463 false
+# 41.5 NaN NaN 93.0634849197759 false
+# 42 NaN NaN 94.17268353326718 false
+# 42.5 NaN NaN 95.28188214675845 false
+# 43 NaN NaN 96.39108076024972 false
+# 43.5 NaN NaN 97.50027937374101 false
+# 44 NaN NaN 98.60947798723228 false
+# 44.5 NaN NaN 99.71867660072355 false
+# 45 NaN NaN 100.82787521421483 false
+# 45.5 NaN NaN 101.9370738277061 false
+# 46 NaN NaN 103.04627244119739 false
+# 46.5 NaN NaN 104.15547105468866 false
+# 47 NaN NaN 105.26466966817993 false
+# 47.5 NaN NaN 106.37386828167121 false
+# 48 NaN NaN 107.4830668951625 false
+# 48.5 NaN NaN 108.59226550865377 false
+# 49 NaN NaN 109.70146412214504 false
+# 49.5 NaN NaN 110.81066273563631 false
+# 50 NaN NaN 111.91986134912759 false
+# 50.5 NaN NaN 113.02905996261887 false
+# 51 NaN NaN 114.13825857611015 false
+# 51.5 NaN NaN 115.24745718960142 false
+# 52 NaN NaN 116.35665580309269 false
+# 52.5 NaN NaN 117.46585441658397 false
+# 53 NaN NaN 118.57505303007525 false
+# 53.5 NaN NaN 119.68425164356653 false
+# 54 NaN NaN 120.7934502570578 false
+# 54.5 NaN NaN 121.90264887054907 false
+# 55 NaN NaN 123.01184748404035 false
+# 55.5 NaN NaN 124.12104609753163 false
+# 56 NaN NaN 125.2302447110229 false
+# 56.5 NaN NaN 126.33944332451418 false
+# 57 NaN NaN 127.44864193800545 false
+# 57.5 NaN NaN 128.55784055149672 false
+# 58 NaN NaN 129.667039164988 false
+# 58.5 NaN NaN 130.77623777847927 false
+# 59 NaN NaN 131.88543639197056 false
+# 59.5 NaN NaN 132.99463500546184 false
+# 60 NaN NaN 134.1038336189531 false
+# 60.5 NaN NaN 135.2130322324444 false
+# 61 NaN NaN 136.32223084593565 false
+# 61.5 NaN NaN 137.43142945942694 false
+# 62 NaN NaN 138.54062807291822 false
+# 62.5 NaN NaN 139.64982668640948 false
+# 63 NaN NaN 140.75902529990077 false
+# 63.5 NaN NaN 141.86822391339203 false
+# 64 NaN NaN 142.97742252688332 false
+# 64.5 NaN NaN 144.0866211403746 false
+# 65 NaN NaN 145.19581975386586 false
+# 65.5 NaN NaN 146.30501836735715 false
+# 66 NaN NaN 147.4142169808484 false
+# 66.5 NaN NaN 148.5234155943397 false
+# 67 NaN NaN 149.63261420783098 false
+# 67.5 NaN NaN 150.74181282132224 false
+# 68 NaN NaN 151.85101143481353 false
+# 68.5 NaN NaN 152.9602100483048 false
+# 69 NaN NaN 154.06940866179607 false
+# 69.5 NaN NaN 155.17860727528736 false
+# 70 NaN NaN 156.28780588877862 false
+# 70.5 NaN NaN 157.3970045022699 false
+# 71 NaN NaN 158.50620311576117 false
+# 71.5 NaN NaN 159.61540172925245 false
+# 72 NaN NaN 160.72460034274374 false
+# 72.5 NaN NaN 161.833798956235 false
+# 73 NaN NaN 162.9429975697263 false
+# 73.5 NaN NaN 164.05219618321755 false
+# 74 NaN NaN 165.16139479670883 false
+# 74.5 NaN NaN 166.27059341020012 false
+# 75 NaN NaN 167.37979202369138 false
+# 75.5 NaN NaN 168.48899063718267 false
+# 76 NaN NaN 169.59818925067393 false
+# 76.5 NaN NaN 170.7073878641652 false
+# 77 NaN NaN 171.8165864776565 false
+# 77.5 NaN NaN 172.92578509114776 false
+# 78 NaN NaN 174.03498370463905 false
+# 78.5 NaN NaN 175.1441823181303 false
+# 79 NaN NaN 176.2533809316216 false
+# 79.5 NaN NaN 177.36257954511288 false
+# 80 NaN NaN 178.47177815860414 false
+# 80.5 NaN NaN 179.58097677209543 false
+# 81 NaN NaN 180.69017538558668 false
+# 81.5 NaN NaN 181.79937399907797 false
+# 82 NaN NaN 182.90857261256926 false
+# 82.5 NaN NaN 184.01777122606052 false
+# 83 NaN NaN 185.1269698395518 false
+# 83.5 NaN NaN 186.23616845304306 false
+# 84 NaN NaN 187.34536706653435 false
+# 84.5 NaN NaN 188.45456568002564 false
+# 85 NaN NaN 189.5637642935169 false
+# 85.5 NaN NaN 190.67296290700818 false
+# 86 NaN NaN 191.78216152049944 false
+# 86.5 NaN NaN 192.89136013399073 false
+# 87 NaN NaN 194.00055874748202 false
+# 87.5 NaN NaN 195.10975736097328 false
+# 88 NaN NaN 196.21895597446456 false
+# 88.5 NaN NaN 197.32815458795582 false
+# 89 NaN NaN 198.4373532014471 false
+# 89.5 NaN NaN 199.5465518149384 false
+# 90 NaN NaN 200.65575042842966 false
+# 90.5 NaN NaN 201.76494904192094 false
+# 91 NaN NaN 202.8741476554122 false
+# 91.5 NaN NaN 203.9833462689035 false
+# 92 NaN NaN 205.09254488239478 false
+# 92.5 NaN NaN 206.20174349588603 false
+# 93 NaN NaN 207.31094210937732 false
+# 93.5 NaN NaN 208.42014072286858 false
+# 94 NaN NaN 209.52933933635987 false
+# 94.5 NaN NaN 210.63853794985116 false
+# 95 NaN NaN 211.74773656334241 false
+# 95.5 NaN NaN 212.8569351768337 false
+# 96 NaN NaN 213.966133790325 false
+# 96.5 NaN NaN 215.07533240381625 false
+# 97 NaN NaN 216.18453101730753 false
+# 97.5 NaN NaN 217.2937296307988 false
+# 98 NaN NaN 218.40292824429008 false
+# 98.5 NaN NaN 219.51212685778137 false
+# 99 NaN NaN 220.62132547127263 false
+# 99.5 NaN NaN 221.7305240847639 false
+# 100 NaN NaN 222.83972269825517 false
+# 100.5 NaN NaN 223.94892131174646 false
+# 101 NaN NaN 225.05811992523775 false
+# 101.5 NaN NaN 226.167318538729 false
+# 102 NaN NaN 227.2765171522203 false
+# 102.5 NaN NaN 228.38571576571155 false
+# 103 NaN NaN 229.49491437920284 false
+# 103.5 NaN NaN 230.60411299269413 false
+# 104 NaN NaN 231.71331160618539 false
+# 104.5 NaN NaN 232.82251021967667 false
+# 105 NaN NaN 233.93170883316793 false
+# 105.5 NaN NaN 235.04090744665922 false
+# 106 NaN NaN 236.1501060601505 false
+# 106.5 NaN NaN 237.25930467364176 false
+# 107 NaN NaN 238.36850328713305 false
+# 107.5 NaN NaN 239.4777019006243 false
+# 108 NaN NaN 240.5869005141156 false
+# 108.5 NaN NaN 241.69609912760689 false
+# 109 NaN NaN 242.80529774109814 false
+# 109.5 NaN NaN 243.91449635458943 false
+# 110 NaN NaN 245.0236949680807 false
+# 110.5 NaN NaN 246.13289358157198 false
+# 111 NaN NaN 247.24209219506326 false
+# 111.5 NaN NaN 248.35129080855452 false
+# 112 NaN NaN 249.4604894220458 false
+# 112.5 NaN NaN 250.56968803553707 false
+# 113 NaN NaN 251.67888664902836 false
+# 113.5 NaN NaN 252.78808526251964 false
+# 114 NaN NaN 253.8972838760109 false
+# 114.5 NaN NaN 255.0064824895022 false
+# 115 NaN NaN 256.11568110299345 false
+# 115.5 NaN NaN 257.22487971648474 false
+# 116 NaN NaN 258.334078329976 false
+# 116.5 NaN NaN 259.4432769434673 false
+# 117 NaN NaN 260.55247555695854 false
+# 117.5 NaN NaN 261.6616741704498 false
+# 118 NaN NaN 262.7708727839411 false
+# 118.5 NaN NaN 263.8800713974324 false
+# 119 NaN NaN 264.9892700109237 false
+# 119.5 NaN NaN 266.0984686244149 false
+# 120 NaN NaN 267.2076672379062 false
+# 120.5 NaN NaN 268.3168658513975 false
+# 121 NaN NaN 269.4260644648888 false
+# 121.5 NaN NaN 270.53526307838007 false
+# 122 NaN NaN 271.6444616918713 false
+# 122.5 NaN NaN 272.7536603053626 false
+# 123 NaN NaN 273.8628589188539 false
+# 123.5 NaN NaN 274.97205753234516 false
+# 124 NaN NaN 276.08125614583645 false
+# 124.5 NaN NaN 277.1904547593277 false
+# 125 NaN NaN 278.29965337281897 false
+# 125.5 NaN NaN 279.40885198631025 false
+# 126 NaN NaN 280.51805059980154 false
+# 126.5 NaN NaN 281.6272492132928 false
+# 127 NaN NaN 282.73644782678406 false
+# 127.5 NaN NaN 283.84564644027535 false
+# 128 NaN NaN 284.95484505376663 false
+# 128.5 NaN NaN 286.0640436672579 false
+# 129 NaN NaN 287.1732422807492 false
+# 129.5 NaN NaN 288.28244089424044 false
+# 130 NaN NaN 289.3916395077317 false
+# 130.5 NaN NaN 290.500838121223 false
+# 131 NaN NaN 291.6100367347143 false
+# 131.5 NaN NaN 292.7192353482056 false
+# 132 NaN NaN 293.8284339616968 false
+# 132.5 NaN NaN 294.9376325751881 false
+# 133 NaN NaN 296.0468311886794 false
+# 133.5 NaN NaN 297.1560298021707 false
+# 134 NaN NaN 298.26522841566197 false
+# 134.5 NaN NaN 299.3744270291532 false
+# 135 NaN NaN 300.4836256426445 false
+# 135.5 NaN NaN 301.59282425613577 false
+# 136 NaN NaN 302.70202286962706 false
+# 136.5 NaN NaN 303.81122148311835 false
+# 137 NaN NaN 304.9204200966096 false
+# 137.5 NaN NaN 306.02961871010086 false
+# 138 NaN NaN 307.13881732359215 false
+# 138.5 NaN NaN 308.24801593708344 false
+# 139 NaN NaN 309.3572145505747 false
+# 139.5 NaN NaN 310.46641316406595 false
+# 140 NaN NaN 311.57561177755724 false
+# 140.5 NaN NaN 312.68481039104853 false
+# 141 NaN NaN 313.7940090045398 false
+# 141.5 NaN NaN 314.9032076180311 false
+# 142 NaN NaN 316.01240623152233 false
+# 142.5 NaN NaN 317.1216048450136 false
+# 143 NaN NaN 318.2308034585049 false
+# 143.5 NaN NaN 319.3400020719962 false
+# 144 NaN NaN 320.4492006854875 false
+# 144.5 NaN NaN 321.5583992989787 false
+# 145 NaN NaN 322.66759791247 false
+# 145.5 NaN NaN 323.7767965259613 false
+# 146 NaN NaN 324.8859951394526 false
+# 146.5 NaN NaN 325.99519375294386 false
+# 147 NaN NaN 327.1043923664351 false
+# 147.5 NaN NaN 328.2135909799264 false
+# 148 NaN NaN 329.32278959341767 false
+# 148.5 NaN NaN 330.43198820690895 false
+# 149 NaN NaN 331.54118682040024 false
+# 149.5 NaN NaN 332.6503854338915 false
+# 150 NaN NaN 333.75958404738276 false
+# 150.5 NaN NaN 334.86878266087405 false
+# 151 NaN NaN 335.97798127436533 false
+# 151.5 NaN NaN 337.0871798878566 false
+# 152 NaN NaN 338.19637850134785 false
+# 152.5 NaN NaN 339.30557711483914 false
+# 153 NaN NaN 340.4147757283304 false
+# 153.5 NaN NaN 341.5239743418217 false
+# 154 NaN NaN 342.633172955313 false
+# 154.5 NaN NaN 343.74237156880423 false
+# 155 NaN NaN 344.8515701822955 false
+# 155.5 NaN NaN 345.9607687957868 false
+# 156 NaN NaN 347.0699674092781 false
+# 156.5 NaN NaN 348.1791660227694 false
+# 157 NaN NaN 349.2883646362606 false
+# 157.5 NaN NaN 350.3975632497519 false
+# 158 NaN NaN 351.5067618632432 false
+# 158.5 NaN NaN 352.6159604767345 false
+# 159 NaN NaN 353.72515909022576 false
+# 159.5 NaN NaN 354.834357703717 false
+# 160 NaN NaN 355.9435563172083 false
+# 160.5 NaN NaN 357.05275493069956 false
+# 161 NaN NaN 358.16195354419085 false
+# 161.5 NaN NaN 359.27115215768214 false
+# 162 NaN NaN 360.38035077117337 false
+# 162.5 NaN NaN 361.48954938466466 false
+# 163 NaN NaN 362.59874799815594 false
+# 163.5 NaN NaN 363.70794661164723 false
+# 164 NaN NaN 364.8171452251385 false
+# 164.5 NaN NaN 365.92634383862975 false
+# curr: 11.115000000000002 2.0149999999999992 px0: 11.115000000000002 py0: 2.0149999999999992
+# court 0 maxTop for sample: 32767
+# tracing...
+# 0.5 NaN NaN 2.1091986134912757 false
+# 1 NaN NaN 3.218397226982552 false
+# 1.5 NaN NaN 4.327595840473828 false
+# 2 NaN NaN 5.436794453965104 false
+# 2.5 NaN NaN 6.545993067456379 false
+# 3 NaN NaN 7.655191680947656 false
+# 3.5 NaN NaN 8.764390294438932 false
+# 4 NaN NaN 9.873588907930207 false
+# 4.5 NaN NaN 10.982787521421484 false
+# 5 NaN NaN 12.091986134912759 false
+# 5.5 NaN NaN 13.201184748404035 false
+# 6 NaN NaN 14.310383361895312 false
+# 6.5 NaN NaN 15.419581975386587 false
+# 7 NaN NaN 16.528780588877865 false
+# 7.5 NaN NaN 17.637979202369138 false
+# 8 NaN NaN 18.747177815860415 false
+# 8.5 NaN NaN 19.85637642935169 false
+# 9 NaN NaN 20.965575042842968 false
+# 9.5 NaN NaN 22.07477365633424 false
+# 10 NaN NaN 23.183972269825517 false
+# 10.5 NaN NaN 24.293170883316794 false
+# 11 NaN NaN 25.40236949680807 false
+# 11.5 NaN NaN 26.511568110299347 false
+# 12 NaN NaN 27.620766723790624 false
+# 12.5 NaN NaN 28.729965337281897 false
+# 13 NaN NaN 29.839163950773173 false
+# 13.5 NaN NaN 30.94836256426445 false
+# 14 NaN NaN 32.05756117775573 false
+# 14.5 NaN NaN 33.166759791247 false
+# 15 NaN NaN 34.275958404738276 false
+# 15.5 NaN NaN 35.385157018229556 false
+# 16 NaN NaN 36.49435563172083 false
+# 16.5 NaN NaN 37.6035542452121 false
+# 17 NaN NaN 38.71275285870338 false
+# 17.5 NaN NaN 39.821951472194655 false
+# 18 NaN NaN 40.931150085685935 false
+# 18.5 NaN NaN 42.04034869917721 false
+# 19 NaN NaN 43.14954731266848 false
+# 19.5 NaN NaN 44.25874592615976 false
+# 20 NaN NaN 45.367944539651035 false
+# 20.5 NaN NaN 46.477143153142315 false
+# 21 NaN NaN 47.58634176663359 false
+# 21.5 NaN NaN 48.69554038012486 false
+# 22 NaN NaN 49.80473899361614 false
+# 22.5 NaN NaN 50.913937607107414 false
+# 23 NaN NaN 52.023136220598694 false
+# 23.5 NaN NaN 53.13233483408997 false
+# 24 NaN NaN 54.24153344758125 false
+# 24.5 NaN NaN 55.35073206107252 false
+# 25 NaN NaN 56.45993067456379 false
+# 25.5 NaN NaN 57.56912928805507 false
+# 26 NaN NaN 58.678327901546346 false
+# 26.5 NaN NaN 59.78752651503763 false
+# 27 NaN NaN 60.8967251285289 false
+# 27.5 NaN NaN 62.00592374202017 false
+# 28 NaN NaN 63.11512235551145 false
+# 28.5 NaN NaN 64.22432096900272 false
+# 29 NaN NaN 65.333519582494 false
+# 29.5 NaN NaN 66.44271819598528 false
+# 30 NaN NaN 67.55191680947655 false
+# 30.5 NaN NaN 68.66111542296782 false
+# 31 NaN NaN 69.77031403645911 false
+# 31.5 NaN NaN 70.87951264995039 false
+# 32 NaN NaN 71.98871126344166 false
+# 32.5 NaN NaN 73.09790987693293 false
+# 33 NaN NaN 74.2071084904242 false
+# 33.5 NaN NaN 75.31630710391549 false
+# 34 NaN NaN 76.42550571740676 false
+# 34.5 NaN NaN 77.53470433089804 false
+# 35 NaN NaN 78.64390294438931 false
+# 35.5 NaN NaN 79.75310155788058 false
+# 36 NaN NaN 80.86230017137187 false
+# 36.5 NaN NaN 81.97149878486314 false
+# 37 NaN NaN 83.08069739835442 false
+# 37.5 NaN NaN 84.18989601184569 false
+# 38 NaN NaN 85.29909462533696 false
+# 38.5 NaN NaN 86.40829323882825 false
+# 39 NaN NaN 87.51749185231952 false
+# 39.5 NaN NaN 88.6266904658108 false
+# 40 NaN NaN 89.73588907930207 false
+# 40.5 NaN NaN 90.84508769279334 false
+# 41 NaN NaN 91.95428630628463 false
+# 41.5 NaN NaN 93.0634849197759 false
+# 42 NaN NaN 94.17268353326718 false
+# 42.5 NaN NaN 95.28188214675845 false
+# 43 NaN NaN 96.39108076024972 false
+# 43.5 NaN NaN 97.50027937374101 false
+# 44 NaN NaN 98.60947798723228 false
+# 44.5 NaN NaN 99.71867660072355 false
+# 45 NaN NaN 100.82787521421483 false
+# 45.5 NaN NaN 101.9370738277061 false
+# 46 NaN NaN 103.04627244119739 false
+# 46.5 NaN NaN 104.15547105468866 false
+# 47 NaN NaN 105.26466966817993 false
+# 47.5 NaN NaN 106.37386828167121 false
+# 48 NaN NaN 107.4830668951625 false
+# 48.5 NaN NaN 108.59226550865377 false
+# 49 NaN NaN 109.70146412214504 false
+# 49.5 NaN NaN 110.81066273563631 false
+# 50 NaN NaN 111.91986134912759 false
+# 50.5 NaN NaN 113.02905996261887 false
+# 51 NaN NaN 114.13825857611015 false
+# 51.5 NaN NaN 115.24745718960142 false
+# 52 NaN NaN 116.35665580309269 false
+# 52.5 NaN NaN 117.46585441658397 false
+# 53 NaN NaN 118.57505303007525 false
+# 53.5 NaN NaN 119.68425164356653 false
+# 54 NaN NaN 120.7934502570578 false
+# 54.5 NaN NaN 121.90264887054907 false
+# 55 NaN NaN 123.01184748404035 false
+# 55.5 NaN NaN 124.12104609753163 false
+# 56 NaN NaN 125.2302447110229 false
+# 56.5 NaN NaN 126.33944332451418 false
+# 57 NaN NaN 127.44864193800545 false
+# 57.5 NaN NaN 128.55784055149672 false
+# 58 NaN NaN 129.667039164988 false
+# 58.5 NaN NaN 130.77623777847927 false
+# 59 NaN NaN 131.88543639197056 false
+# 59.5 NaN NaN 132.99463500546184 false
+# 60 NaN NaN 134.1038336189531 false
+# 60.5 NaN NaN 135.2130322324444 false
+# 61 NaN NaN 136.32223084593565 false
+# 61.5 NaN NaN 137.43142945942694 false
+# 62 NaN NaN 138.54062807291822 false
+# 62.5 NaN NaN 139.64982668640948 false
+# 63 NaN NaN 140.75902529990077 false
+# 63.5 NaN NaN 141.86822391339203 false
+# 64 NaN NaN 142.97742252688332 false
+# 64.5 NaN NaN 144.0866211403746 false
+# 65 NaN NaN 145.19581975386586 false
+# 65.5 NaN NaN 146.30501836735715 false
+# 66 NaN NaN 147.4142169808484 false
+# 66.5 NaN NaN 148.5234155943397 false
+# 67 NaN NaN 149.63261420783098 false
+# 67.5 NaN NaN 150.74181282132224 false
+# 68 NaN NaN 151.85101143481353 false
+# 68.5 NaN NaN 152.9602100483048 false
+# 69 NaN NaN 154.06940866179607 false
+# 69.5 NaN NaN 155.17860727528736 false
+# 70 NaN NaN 156.28780588877862 false
+# 70.5 NaN NaN 157.3970045022699 false
+# 71 NaN NaN 158.50620311576117 false
+# 71.5 NaN NaN 159.61540172925245 false
+# 72 NaN NaN 160.72460034274374 false
+# 72.5 NaN NaN 161.833798956235 false
+# 73 NaN NaN 162.9429975697263 false
+# 73.5 NaN NaN 164.05219618321755 false
+# 74 NaN NaN 165.16139479670883 false
+# 74.5 NaN NaN 166.27059341020012 false
+# 75 NaN NaN 167.37979202369138 false
+# 75.5 NaN NaN 168.48899063718267 false
+# 76 NaN NaN 169.59818925067393 false
+# 76.5 NaN NaN 170.7073878641652 false
+# 77 NaN NaN 171.8165864776565 false
+# 77.5 NaN NaN 172.92578509114776 false
+# 78 NaN NaN 174.03498370463905 false
+# 78.5 NaN NaN 175.1441823181303 false
+# 79 NaN NaN 176.2533809316216 false
+# 79.5 NaN NaN 177.36257954511288 false
+# 80 NaN NaN 178.47177815860414 false
+# 80.5 NaN NaN 179.58097677209543 false
+# 81 NaN NaN 180.69017538558668 false
+# 81.5 NaN NaN 181.79937399907797 false
+# 82 NaN NaN 182.90857261256926 false
+# 82.5 NaN NaN 184.01777122606052 false
+# 83 NaN NaN 185.1269698395518 false
+# 83.5 NaN NaN 186.23616845304306 false
+# 84 NaN NaN 187.34536706653435 false
+# 84.5 NaN NaN 188.45456568002564 false
+# 85 NaN NaN 189.5637642935169 false
+# 85.5 NaN NaN 190.67296290700818 false
+# 86 NaN NaN 191.78216152049944 false
+# 86.5 NaN NaN 192.89136013399073 false
+# 87 NaN NaN 194.00055874748202 false
+# 87.5 NaN NaN 195.10975736097328 false
+# 88 NaN NaN 196.21895597446456 false
+# 88.5 NaN NaN 197.32815458795582 false
+# 89 NaN NaN 198.4373532014471 false
+# 89.5 NaN NaN 199.5465518149384 false
+# 90 NaN NaN 200.65575042842966 false
+# 90.5 NaN NaN 201.76494904192094 false
+# 91 NaN NaN 202.8741476554122 false
+# 91.5 NaN NaN 203.9833462689035 false
+# 92 NaN NaN 205.09254488239478 false
+# 92.5 NaN NaN 206.20174349588603 false
+# 93 NaN NaN 207.31094210937732 false
+# 93.5 NaN NaN 208.42014072286858 false
+# 94 NaN NaN 209.52933933635987 false
+# 94.5 NaN NaN 210.63853794985116 false
+# 95 NaN NaN 211.74773656334241 false
+# 95.5 NaN NaN 212.8569351768337 false
+# 96 NaN NaN 213.966133790325 false
+# 96.5 NaN NaN 215.07533240381625 false
+# 97 NaN NaN 216.18453101730753 false
+# 97.5 NaN NaN 217.2937296307988 false
+# 98 NaN NaN 218.40292824429008 false
+# 98.5 NaN NaN 219.51212685778137 false
+# 99 NaN NaN 220.62132547127263 false
+# 99.5 NaN NaN 221.7305240847639 false
+# 100 NaN NaN 222.83972269825517 false
+# 100.5 NaN NaN 223.94892131174646 false
+# 101 NaN NaN 225.05811992523775 false
+# 101.5 NaN NaN 226.167318538729 false
+# 102 NaN NaN 227.2765171522203 false
+# 102.5 NaN NaN 228.38571576571155 false
+# 103 NaN NaN 229.49491437920284 false
+# 103.5 NaN NaN 230.60411299269413 false
+# 104 NaN NaN 231.71331160618539 false
+# 104.5 NaN NaN 232.82251021967667 false
+# 105 NaN NaN 233.93170883316793 false
+# 105.5 NaN NaN 235.04090744665922 false
+# 106 NaN NaN 236.1501060601505 false
+# 106.5 NaN NaN 237.25930467364176 false
+# 107 NaN NaN 238.36850328713305 false
+# 107.5 NaN NaN 239.4777019006243 false
+# 108 NaN NaN 240.5869005141156 false
+# 108.5 NaN NaN 241.69609912760689 false
+# 109 NaN NaN 242.80529774109814 false
+# 109.5 NaN NaN 243.91449635458943 false
+# 110 NaN NaN 245.0236949680807 false
+# 110.5 NaN NaN 246.13289358157198 false
+# 111 NaN NaN 247.24209219506326 false
+# 111.5 NaN NaN 248.35129080855452 false
+# 112 NaN NaN 249.4604894220458 false
+# 112.5 NaN NaN 250.56968803553707 false
+# 113 NaN NaN 251.67888664902836 false
+# 113.5 NaN NaN 252.78808526251964 false
+# 114 NaN NaN 253.8972838760109 false
+# 114.5 NaN NaN 255.0064824895022 false
+# 115 NaN NaN 256.11568110299345 false
+# 115.5 NaN NaN 257.22487971648474 false
+# 116 NaN NaN 258.334078329976 false
+# 116.5 NaN NaN 259.4432769434673 false
+# 117 NaN NaN 260.55247555695854 false
+# 117.5 NaN NaN 261.6616741704498 false
+# 118 NaN NaN 262.7708727839411 false
+# 118.5 NaN NaN 263.8800713974324 false
+# 119 NaN NaN 264.9892700109237 false
+# 119.5 NaN NaN 266.0984686244149 false
+# 120 NaN NaN 267.2076672379062 false
+# 120.5 NaN NaN 268.3168658513975 false
+# 121 NaN NaN 269.4260644648888 false
+# 121.5 NaN NaN 270.53526307838007 false
+# 122 NaN NaN 271.6444616918713 false
+# 122.5 NaN NaN 272.7536603053626 false
+# 123 NaN NaN 273.8628589188539 false
+# 123.5 NaN NaN 274.97205753234516 false
+# 124 NaN NaN 276.08125614583645 false
+# 124.5 NaN NaN 277.1904547593277 false
+# 125 NaN NaN 278.29965337281897 false
+# 125.5 NaN NaN 279.40885198631025 false
+# 126 NaN NaN 280.51805059980154 false
+# 126.5 NaN NaN 281.6272492132928 false
+# 127 NaN NaN 282.73644782678406 false
+# 127.5 NaN NaN 283.84564644027535 false
+# 128 NaN NaN 284.95484505376663 false
+# 128.5 NaN NaN 286.0640436672579 false
+# 129 NaN NaN 287.1732422807492 false
+# 129.5 NaN NaN 288.28244089424044 false
+# 130 NaN NaN 289.3916395077317 false
+# 130.5 NaN NaN 290.500838121223 false
+# 131 NaN NaN 291.6100367347143 false
+# 131.5 NaN NaN 292.7192353482056 false
+# 132 NaN NaN 293.8284339616968 false
+# 132.5 NaN NaN 294.9376325751881 false
+# 133 NaN NaN 296.0468311886794 false
+# 133.5 NaN NaN 297.1560298021707 false
+# 134 NaN NaN 298.26522841566197 false
+# 134.5 NaN NaN 299.3744270291532 false
+# 135 NaN NaN 300.4836256426445 false
+# 135.5 NaN NaN 301.59282425613577 false
+# 136 NaN NaN 302.70202286962706 false
+# 136.5 NaN NaN 303.81122148311835 false
+# 137 NaN NaN 304.9204200966096 false
+# 137.5 NaN NaN 306.02961871010086 false
+# 138 NaN NaN 307.13881732359215 false
+# 138.5 NaN NaN 308.24801593708344 false
+# 139 NaN NaN 309.3572145505747 false
+# 139.5 NaN NaN 310.46641316406595 false
+# 140 NaN NaN 311.57561177755724 false
+# 140.5 NaN NaN 312.68481039104853 false
+# 141 NaN NaN 313.7940090045398 false
+# 141.5 NaN NaN 314.9032076180311 false
+# 142 NaN NaN 316.01240623152233 false
+# 142.5 NaN NaN 317.1216048450136 false
+# 143 NaN NaN 318.2308034585049 false
+# 143.5 NaN NaN 319.3400020719962 false
+# 144 NaN NaN 320.4492006854875 false
+# 144.5 NaN NaN 321.5583992989787 false
+# 145 NaN NaN 322.66759791247 false
+# 145.5 NaN NaN 323.7767965259613 false
+# 146 NaN NaN 324.8859951394526 false
+# 146.5 NaN NaN 325.99519375294386 false
+# 147 NaN NaN 327.1043923664351 false
+# 147.5 NaN NaN 328.2135909799264 false
+# 148 NaN NaN 329.32278959341767 false
+# 148.5 NaN NaN 330.43198820690895 false
+# 149 NaN NaN 331.54118682040024 false
+# 149.5 NaN NaN 332.6503854338915 false
+# 150 NaN NaN 333.75958404738276 false
+# 150.5 NaN NaN 334.86878266087405 false
+# 151 NaN NaN 335.97798127436533 false
+# 151.5 NaN NaN 337.0871798878566 false
+# 152 NaN NaN 338.19637850134785 false
+# 152.5 NaN NaN 339.30557711483914 false
+# 153 NaN NaN 340.4147757283304 false
+# 153.5 NaN NaN 341.5239743418217 false
+# 154 NaN NaN 342.633172955313 false
+# 154.5 NaN NaN 343.74237156880423 false
+# 155 NaN NaN 344.
+# 8515701822955 false
+# 155.5 NaN NaN 345.9607687957868 false
+# 156 NaN NaN 347.0699674092781 false
+# 156.5 NaN NaN 348.1791660227694 false
+# 157 NaN NaN 349.2883646362606 false
+# 157.5 NaN NaN 350.3975632497519 false
+# 158 NaN NaN 351.5067618632432 false
+# 158.5 NaN NaN 352.6159604767345 false
+# 159 NaN NaN 353.72515909022576 false
+# 159.5 NaN NaN 354.834357703717 false
+# 160 NaN NaN 355.9435563172083 false
+# 160.5 NaN NaN 357.05275493069956 false
+# 161 NaN NaN 358.16195354419085 false
+# 161.5 NaN NaN 359.27115215768214 false
+# 162 NaN NaN 360.38035077117337 false
+# 162.5 NaN NaN 361.48954938466466 false
+# 163 NaN NaN 362.59874799815594 false
+# 163.5 NaN NaN 363.70794661164723 false
+# 164 NaN NaN 364.8171452251385 false
+# 164.5 NaN NaN 365.92634383862975 false
+# curr: 11.115000000000002 3.414999999999999 px0: 11.115000000000002 py0: 3.414999999999999
+# court 0 maxTop for sample: 32767
+# tracing...
+# 0.5 NaN NaN 2.1091986134912757 false
+# 1 NaN NaN 3.218397226982552 false
+# 1.5 NaN NaN 4.327595840473828 false
+# 2 NaN NaN 5.436794453965104 false
+# 2.5 NaN NaN 6.545993067456379 false
+# 3 NaN NaN 7.655191680947656 false
+# 3.5 NaN NaN 8.764390294438932 false
+# 4 NaN NaN 9.873588907930207 false
+# 4.5 NaN NaN 10.982787521421484 false
+# 5 NaN NaN 12.091986134912759 false
+# 5.5 NaN NaN 13.201184748404035 false
+# 6 NaN NaN 14.310383361895312 false
+# 6.5 NaN NaN 15.419581975386587 false
+# 7 NaN NaN 16.528780588877865 false
+# 7.5 NaN NaN 17.637979202369138 false
+# 8 NaN NaN 18.747177815860415 false
+# 8.5 NaN NaN 19.85637642935169 false
+# 9 NaN NaN 20.965575042842968 false
+# 9.5 NaN NaN 22.07477365633424 false
+# 10 NaN NaN 23.183972269825517 false
+# 10.5 NaN NaN 24.293170883316794 false
+# 11 NaN NaN 25.40236949680807 false
+# 11.5 NaN NaN 26.511568110299347 false
+# 12 NaN NaN 27.620766723790624 false
+# 12.5 NaN NaN 28.729965337281897 false
+# 13 NaN NaN 29.839163950773173 false
+# 13.5 NaN NaN 30.94836256426445 false
+# 14 NaN NaN 32.05756117775573 false
+# 14.5 NaN NaN 33.166759791247 false
+# 15 NaN NaN 34.275958404738276 false
+# 15.5 NaN NaN 35.385157018229556 false
+# 16 NaN NaN 36.49435563172083 false
+# 16.5 NaN NaN 37.6035542452121 false
+# 17 NaN NaN 38.71275285870338 false
+# 17.5 NaN NaN 39.821951472194655 false
+# 18 NaN NaN 40.931150085685935 false
+# 18.5 NaN NaN 42.04034869917721 false
+# 19 NaN NaN 43.14954731266848 false
+# 19.5 NaN NaN 44.25874592615976 false
+# 20 NaN NaN 45.367944539651035 false
+# 20.5 NaN NaN 46.477143153142315 false
+# 21 NaN NaN 47.58634176663359 false
+# 21.5 NaN NaN 48.69554038012486 false
+# 22 NaN NaN 49.80473899361614 false
+# 22.5 NaN NaN 50.913937607107414 false
+# 23 NaN NaN 52.023136220598694 false
+# 23.5 NaN NaN 53.13233483408997 false
+# 24 NaN NaN 54.24153344758125 false
+# 24.5 NaN NaN 55.35073206107252 false
+# 25 NaN NaN 56.45993067456379 false
+# 25.5 NaN NaN 57.56912928805507 false
+# 26 NaN NaN 58.678327901546346 false
+# 26.5 NaN NaN 59.78752651503763 false
+# 27 NaN NaN 60.8967251285289 false
+# 27.5 NaN NaN 62.00592374202017 false
+# 28 NaN NaN 63.11512235551145 false
+# 28.5 NaN NaN 64.22432096900272 false
+# 29 NaN NaN 65.333519582494 false
+# 29.5 NaN NaN 66.44271819598528 false
+# 30 NaN NaN 67.55191680947655 false
+# 30.5 NaN NaN 68.66111542296782 false
+# 31 NaN NaN 69.77031403645911 false
+# 31.5 NaN NaN 70.87951264995039 false
+# 32 NaN NaN 71.98871126344166 false
+# 32.5 NaN NaN 73.09790987693293 false
+# 33 NaN NaN 74.2071084904242 false
+# 33.5 NaN NaN 75.31630710391549 false
+# 34 NaN NaN 76.42550571740676 false
+# 34.5 NaN NaN 77.53470433089804 false
+# 35 NaN NaN 78.64390294438931 false
+# 35.5 NaN NaN 79.75310155788058 false
+# 36 NaN NaN 80.86230017137187 false
+# 36.5 NaN NaN 81.97149878486314 false
+# 37 NaN NaN 83.08069739835442 false
+# 37.5 NaN NaN 84.18989601184569 false
+# 38 NaN NaN 85.29909462533696 false
+# 38.5 NaN NaN 86.40829323882825 false
+# 39 NaN NaN 87.51749185231952 false
+# 39.5 NaN NaN 88.6266904658108 false
+# 40 NaN NaN 89.73588907930207 false
+# 40.5 NaN NaN 90.84508769279334 false
+# 41 NaN NaN 91.95428630628463 false
+# 41.5 NaN NaN 93.0634849197759 false
+# 42 NaN NaN 94.17268353326718 false
+# 42.5 NaN NaN 95.28188214675845 false
+# 43 NaN NaN 96.39108076024972 false
+# 43.5 NaN NaN 97.50027937374101 false
+# 44 NaN NaN 98.60947798723228 false
+# 44.5 NaN NaN 99.71867660072355 false
+# 45 NaN NaN 100.82787521421483 false
+# 45.5 NaN NaN 101.9370738277061 false
+# 46 NaN NaN 103.04627244119739 false
+# 46.5 NaN NaN 104.15547105468866 false
+# 47 NaN NaN 105.26466966817993 false
+# 47.5 NaN NaN 106.37386828167121 false
+# 48 NaN NaN 107.4830668951625 false
+# 48.5 NaN NaN 108.59226550865377 false
+# 49 NaN NaN 109.70146412214504 false
+# 49.5 NaN NaN 110.81066273563631 false
+# 50 NaN NaN 111.91986134912759 false
+# 50.5 NaN NaN 113.02905996261887 false
+# 51 NaN NaN 114.13825857611015 false
+# 51.5 NaN NaN 115.24745718960142 false
+# 52 NaN NaN 116.35665580309269 false
+# 52.5 NaN NaN 117.46585441658397 false
+# 53 NaN NaN 118.57505303007525 false
+# 53.5 NaN NaN 119.68425164356653 false
+# 54 NaN NaN 120.7934502570578 false
+# 54.5 NaN NaN 121.90264887054907 false
+# 55 NaN NaN 123.01184748404035 false
+# 55.5 NaN NaN 124.12104609753163 false
+# 56 NaN NaN 125.2302447110229 false
+# 56.5 NaN NaN 126.33944332451418 false
+# 57 NaN NaN 127.44864193800545 false
+# 57.5 NaN NaN 128.55784055149672 false
+# 58 NaN NaN 129.667039164988 false
+# 58.5 NaN NaN 130.77623777847927 false
+# 59 NaN NaN 131.88543639197056 false
+# 59.5 NaN NaN 132.99463500546184 false
+# 60 NaN NaN 134.1038336189531 false
+# 60.5 NaN NaN 135.2130322324444 false
+# 61 NaN NaN 136.32223084593565 false
+# 61.5 NaN NaN 137.43142945942694 false
+# 62 NaN NaN 138.54062807291822 false
+# 62.5 NaN NaN 139.64982668640948 false
+# 63 NaN NaN 140.75902529990077 false
+# 63.5 NaN NaN 141.86822391339203 false
+# 64 NaN NaN 142.97742252688332 false
+# 64.5 NaN NaN 144.0866211403746 false
+# 65 NaN NaN 145.19581975386586 false
+# 65.5 NaN NaN 146.30501836735715 false
+# 66 NaN NaN 147.4142169808484 false
+# 66.5 NaN NaN 148.5234155943397 false
+# 67 NaN NaN 149.63261420783098 false
+# 67.5 NaN NaN 150.74181282132224 false
+# 68 NaN NaN 151.85101143481353 false
+# 68.5 NaN NaN 152.9602100483048 false
+# 69 NaN NaN 154.06940866179607 false
+# 69.5 NaN NaN 155.17860727528736 false
+# 70 NaN NaN 156.28780588877862 false
+# 70.5 NaN NaN 157.3970045022699 false
+# 71 NaN NaN 158.50620311576117 false
+# 71.5 NaN NaN 159.61540172925245 false
+# 72 NaN NaN 160.72460034274374 false
+# 72.5 NaN NaN 161.833798956235 false
+# 73 NaN NaN 162.9429975697263 false
+# 73.5 NaN NaN 164.05219618321755 false
+# 74 NaN NaN 165.16139479670883 false
+# 74.5 NaN NaN 166.27059341020012 false
+# 75 NaN NaN 167.37979202369138 false
+# 75.5 NaN NaN 168.48899063718267 false
+# 76 NaN NaN 169.59818925067393 false
+# 76.5 NaN NaN 170.7073878641652 false
+# 77 NaN NaN 171.8165864776565 false
+# 77.5 NaN NaN 172.92578509114776 false
+# 78 NaN NaN 174.03498370463905 false
+# 78.5 NaN NaN 175.1441823181303 false
+# 79 NaN NaN 176.2533809316216 false
+# 79.5 NaN NaN 177.36257954511288 false
+# 80 NaN NaN 178.47177815860414 false
+# 80.5 NaN NaN 179.58097677209543 false
+# 81 NaN NaN 180.69017538558668 false
+# 81.5 NaN NaN 181.79937399907797 false
+# 82 NaN NaN 182.90857261256926 false
+# 82.5 NaN NaN 184.01777122606052 false
+# 83 NaN NaN 185.1269698395518 false
+# 83.5 NaN NaN 186.23616845304306 false
+# 84 NaN NaN 187.34536706653435 false
+# 84.5 NaN NaN 188.45456568002564 false
+# 85 NaN NaN 189.5637642935169 false
+# 85.5 NaN NaN 190.67296290700818 false
+# 86 NaN NaN 191.78216152049944 false
+# 86.5 NaN NaN 192.89136013399073 false
+# 87 NaN NaN 194.00055874748202 false
+# 87.5 NaN NaN 195.10975736097328 false
+# 88 NaN NaN 196.21895597446456 false
+# 88.5 NaN NaN 197.32815458795582 false
+# 89 NaN NaN 198.4373532014471 false
+# 89.5 NaN NaN 199.5465518149384 false
+# 90 NaN NaN 200.65575042842966 false
+# 90.5 NaN NaN 201.76494904192094 false
+# 91 NaN NaN 202.8741476554122 false
+# 91.5 NaN NaN 203.9833462689035 false
+# 92 NaN NaN 205.09254488239478 false
+# 92.5 NaN NaN 206.20174349588603 false
+# 93 NaN NaN 207.31094210937732 false
+# 93.5 NaN NaN 208.42014072286858 false
+# 94 NaN NaN 209.52933933635987 false
+# 94.5 NaN NaN 210.63853794985116 false
+# 95 NaN NaN 211.74773656334241 false
+# 95.5 NaN NaN 212.8569351768337 false
+# 96 NaN NaN 213.966133790325 false
+# 96.5 NaN NaN 215.07533240381625 false
+# 97 NaN NaN 216.18453101730753 false
+# 97.5 NaN NaN 217.2937296307988 false
+# 98 NaN NaN 218.40292824429008 false
+# 98.5 NaN NaN 219.51212685778137 false
+# 99 NaN NaN 220.62132547127263 false
+# 99.5 NaN NaN 221.7305240847639 false
+# 100 NaN NaN 222.83972269825517 false
+# 100.5 NaN NaN 223.94892131174646 false
+# 101 NaN NaN 225.05811992523775 false
+# 101.5 NaN NaN 226.167318538729 false
+# 102 NaN NaN 227.2765171522203 false
+# 102.5 NaN NaN 228.38571576571155 false
+# 103 NaN NaN 229.49491437920284 false
+# 103.5 NaN NaN 230.60411299269413 false
+# 104 NaN NaN 231.71331160618539 false
+# 104.5 NaN NaN 232.82251021967667 false
+# 105 NaN NaN 233.93170883316793 false
+# 105.5 NaN NaN 235.04090744665922 false
+# 106 NaN NaN 236.1501060601505 false
+# 106.5 NaN NaN 237.25930467364176 false
+# 107 NaN NaN 238.36850328713305 false
+# 107.5 NaN NaN 239.4777019006243 false
+# 108 NaN NaN 240.5869005141156 false
+# 108.5 NaN NaN 241.69609912760689 false
+# 109 NaN NaN 242.80529774109814 false
+# 109.5 NaN NaN 243.91449635458943 false
+# 110 NaN NaN 245.0236949680807 false
+# 110.5 NaN NaN 246.13289358157198 false
+# 111 NaN NaN 247.24209219506326 false
+# 111.5 NaN NaN 248.35129080855452 false
+# 112 NaN NaN 249.4604894220458 false
+# 112.5 NaN NaN 250.56968803553707 false
+# 113 NaN NaN 251.67888664902836 false
+# 113.5 NaN NaN 252.78808526251964 false
+# 114 NaN NaN 253.8972838760109 false
+# 114.5 NaN NaN 255.0064824895022 false
+# 115 NaN NaN 256.11568110299345 false
+# 115.5 NaN NaN 257.22487971648474 false
+# 116 NaN NaN 258.334078329976 false
+# 116.5 NaN NaN 259.4432769434673 false
+# 117 NaN NaN 260.55247555695854 false
+# 117.5 NaN NaN 261.6616741704498 false
+# 118 NaN NaN 262.7708727839411 false
+# 118.5 NaN NaN 263.8800713974324 false
+# 119 NaN NaN 264.9892700109237 false
+# 119.5 NaN NaN 266.0984686244149 false
+# 120 NaN NaN 267.2076672379062 false
+# 120.5 NaN NaN 268.3168658513975 false
+# 121 NaN NaN 269.4260644648888 false
+# 121.5 NaN NaN 270.53526307838007 false
+# 122 NaN NaN 271.6444616918713 false
+# 122.5 NaN NaN 272.7536603053626 false
+# 123 NaN NaN 273.8628589188539 false
+# 123.5 NaN NaN 274.97205753234516 false
+# 124 NaN NaN 276.08125614583645 false
+# 124.5 NaN NaN 277.1904547593277 false
+# 125 NaN NaN 278.29965337281897 false
+# 125.5 NaN NaN 279.40885198631025 false
+# 126 NaN NaN 280.51805059980154 false
+# 126.5 NaN NaN 281.6272492132928 false
+# 127 NaN NaN 282.73644782678406 false
+# 127.5 NaN NaN 283.84564644027535 false
+# 128 NaN NaN 284.95484505376663 false
+# 128.5 NaN NaN 286.0640436672579 false
+# 129 NaN NaN 287.1732422807492 false
+# 129.5 NaN NaN 288.28244089424044 false
+# 130 NaN NaN 289.3916395077317 false
+# 130.5 NaN NaN 290.500838121223 false
+# 131 NaN NaN 291.6100367347143 false
+# 131.5 NaN NaN 292.7192353482056 false
+# 132 NaN NaN 293.8284339616968 false
+# 132.5 NaN NaN 294.9376325751881 false
+# 133 NaN NaN 296.0468311886794 false
+# 133.5 NaN NaN 297.1560298021707 false
+# 134 NaN NaN 298.26522841566197 false
+# 134.5 NaN NaN 299.3744270291532 false
+# 135 NaN NaN 300.4836256426445 false
+# 135.5 NaN NaN 301.59282425613577 false
+# 136 NaN NaN 302.70202286962706 false
+# 136.5 NaN NaN 303.81122148311835 false
+# 137 NaN NaN 304.9204200966096 false
+# 137.5 NaN NaN 306.02961871010086 false
+# 138 NaN NaN 307.13881732359215 false
+# 138.5 NaN NaN 308.24801593708344 false
+# 139 NaN NaN 309.3572145505747 false
+# 139.5 NaN NaN 310.46641316406595 false
+# 140 NaN NaN 311.57561177755724 false
+# 140.5 NaN NaN 312.68481039104853 false
+# 141 NaN NaN 313.7940090045398 false
+# 141.5 NaN NaN 314.9032076180311 false
+# 142 NaN NaN 316.01240623152233 false
+# 142.5 NaN NaN 317.1216048450136 false
+# 143 NaN NaN 318.2308034585049 false
+# 143.5 NaN NaN 319.3400020719962 false
+# 144 NaN NaN 320.4492006854875 false
+# 144.5 NaN NaN 321.5583992989787 false
+# 145 NaN NaN 322.66759791247 false
+# 145.5 NaN NaN 323.7767965259613 false
+# 146 NaN NaN 324.8859951394526 false
+# 146.5 NaN NaN 325.99519375294386 false
+# 147 NaN NaN 327.1043923664351 false
+# 147.5 NaN NaN 328.2135909799264 false
+# 148 NaN NaN 329.32278959341767 false
+# 148.5 NaN NaN 330.43198820690895 false
+# 149 NaN NaN 331.54118682040024 false
+# 149.5 NaN NaN 332.6503854338915 false
+# 150 NaN NaN 333.75958404738276 false
+# 150.5 NaN NaN 334.86878266087405 false
+# 151 NaN NaN 335.97798127436533 false
+# 151.5 NaN NaN 337.0871798878566 false
+# 152 NaN NaN 338.19637850134785 false
+# 152.5 NaN NaN 339.30557711483914 false
+# 153 NaN NaN 340.4147757283304 false
+# 153.5 NaN NaN 341.5239743418217 false
+# 154 NaN NaN 342.633172955313 false
+# 154.5 NaN NaN 343.74237156880423 false
+# 155 NaN NaN 344.8515701822955 false
+# 155.5 NaN NaN 345.9607687957868 false
+# 156 NaN NaN 347.0699674092781 false
+# 156.5 NaN NaN 348.1791660227694 false
+# 157 NaN NaN 349.2883646362606 false
+# 157.5 NaN NaN 350.3975632497519 false
+# 158 NaN NaN 351.5067618632432 false
+# 158.5 NaN NaN 352.6159604767345 false
+# 159 NaN NaN 353.72515909022576 false
+# 159.5 NaN NaN 354.834357703717 false
+# 160 NaN NaN 355.9435563172083 false
+# 160.5 NaN NaN 357.05275493069956 false
+# 161 NaN NaN 358.16195354419085 false
+# 161.5 NaN NaN 359.27115215768214 false
+# 162 NaN NaN 360.38035077117337 false
+# 162.5 NaN NaN 361.48954938466466 false
+# 163 NaN NaN 362.59874799815594 false
+# 163.5 NaN NaN 363.70794661164723 false
+# 164 NaN NaN 364.8171452251385 false
+# 164.5 NaN NaN 365.92634383862975 false
+# curr: 11.115000000000002 4.8149999999999995 px0: 11.115000000000002 py0: 4.8149999999999995
+# court 0 maxTop for sample: 32767
+# tracing...
+# 0.5 NaN NaN 2.1091986134912757 false
+# 1 NaN NaN 3.218397226982552 false
+# 1.5 NaN NaN 4.327595840473828 false
+# 2 NaN NaN 5.436794453965104 false
+# 2.5 NaN NaN 6.545993067456379 false
+# 3 NaN NaN 7.655191680947656 false
+# 3.5 NaN NaN 8.764390294438932 false
+# 4 NaN NaN 9.873588907930207 false
+# 4.5 NaN NaN 10.982787521421484 false
+# 5 NaN NaN 12.091986134912759 false
+# 5.5 NaN NaN 13.201184748404035 false
+# 6 NaN NaN 14.310383361895312 false
+# 6.5 NaN NaN 15.419581975386587 false
+# 7 NaN NaN 16.528780588877865 false
+# 7.5 NaN NaN 17.637979202369138 false
+# 8 NaN NaN 18.747177815860415 false
+# 8.5 NaN NaN 19.85637642935169 false
+# 9 NaN NaN 20.965575042842968 false
+# 9.5 NaN NaN 22.07477365633424 false
+# 10 NaN NaN 23.183972269825517 false
+# 10.5 NaN NaN 24.293170883316794 false
+# 11 NaN NaN 25.40236949680807 false
+# 11.5 NaN NaN 26.511568110299347 false
+# 12 NaN NaN 27.620766723790624 false
+# 12.5 NaN NaN 28.729965337281897 false
+# 13 NaN NaN 29.839163950773173 false
+# 13.5 NaN NaN 30.94836256426445 false
+# 14 NaN NaN 32.05756117775573 false
+# 14.5 NaN NaN 33.166759791247 false
+# 15 NaN NaN 34.275958404738276 false
+# 15.5 NaN NaN 35.385157018229556 false
+# 16 NaN NaN 36.49435563172083 false
+# 16.5 NaN NaN 37.6035542452121 false
+# 17 NaN NaN 38.71275285870338 false
+# 17.5 NaN NaN 39.821951472194655 false
+# 18 NaN NaN 40.931150085685935 false
+# 18.5 NaN NaN 42.04034869917721 false
+# 19 NaN NaN 43.14954731266848 false
+# 19.5 NaN NaN 44.25874592615976 false
+# 20 NaN NaN 45.367944539651035 false
+# 20.5 NaN NaN 46.477143153142315 false
+# 21 NaN NaN 47.58634176663359 false
+# 21.5 NaN NaN 48.69554038012486 false
+# 22 NaN NaN 49.80473899361614 false
+# 22.5 NaN NaN 50.913937607107414 false
+# 23 NaN NaN 52.023136220598694 false
+# 23.5 NaN NaN 53.13233483408997 false
+# 24 NaN NaN 54.24153344758125 false
+# 24.5 NaN NaN 55.35073206107252 false
+# 25 NaN NaN 56.45993067456379 false
+# 25.5 NaN NaN 57.56912928805507 false
+# 26 NaN NaN 58.678327901546346 false
+# 26.5 NaN NaN 59.78752651503763 false
+# 27 NaN NaN 60.8967251285289 false
+# 27.5 NaN NaN 62.00592374202017 false
+# 28 NaN NaN 63.11512235551145 false
+# 28.5 NaN NaN 64.22432096900272 false
+# 29 NaN NaN 65.333519582494 false
+# 29.5 NaN NaN 66.44271819598528 false
+# 30 NaN NaN 67.55191680947655 false
+# 30.5 NaN NaN 68.66111542296782 false
+# 31 NaN NaN 69.77031403645911 false
+# 31.5 NaN NaN 70.87951264995039 false
+# 32 NaN NaN 71.98871126344166 false
+# 32.5 NaN NaN 73.09790987693293 false
+# 33 NaN NaN 74.2071084904242 false
+# 33.5 NaN NaN 75.31630710391549 false
+# 34 NaN NaN 76.42550571740676 false
+# 34.5 NaN NaN 77.53470433089804 false
+# 35 NaN NaN 78.64390294438931 false
+# 35.5 NaN NaN 79.75310155788058 false
+# 36 NaN NaN 80.86230017137187 false
+# 36.5 NaN NaN 81.97149878486314 false
+# 37 NaN NaN 83.08069739835442 false
+# 37.5 NaN NaN 84.18989601184569 false
+# 38 NaN NaN 85.29909462533696 false
+# 38.5 NaN NaN 86.40829323882825 false
+# 39 NaN NaN 87.51749185231952 false
+# 39.5 NaN NaN 88.6266904658108 false
+# 40 NaN NaN 89.73588907930207 false
+# 40.5 NaN NaN 90.84508769279334 false
+# 41 NaN NaN 91.95428630628463 false
+# 41.5 NaN NaN 93.0634849197759 false
+# 42 NaN NaN 94.17268353326718 false
+# 42.5 NaN NaN 95.28188214675845 false
+# 43 NaN NaN 96.39108076024972 false
+# 43.5 NaN NaN 97.50027937374101 false
+# 44 NaN NaN 98.60947798723228 false
+# 44.5 NaN NaN 99.71867660072355 false
+# 45 NaN NaN 100.82787521421483 false
+# 45.5 NaN NaN 101.9370738277061 false
+# 46 NaN NaN 103.04627244119739 false
+# 46.5 NaN NaN 104.15547105468866 false
+# 47 NaN NaN 105.26466966817993 false
+# 47.5 NaN NaN 106.37386828167121 false
+# 48 NaN NaN 107.4830668951625 false
+# 48.5 NaN NaN 108.59226550865377 false
+# 49 NaN NaN 109.70146412214504 false
+# 49.5 NaN NaN 110.81066273563631 false
+# 50 NaN NaN 111.91986134912759 false
+# 50.5 NaN NaN 113.02905996261887 false
+# 51 NaN NaN 114.13825857611015 false
+# 51.5 NaN NaN 115.24745718960142 false
+# 52 NaN NaN 116.35665580309269 false
+# 52.5 NaN NaN 117.46585441658397 false
+# 53 NaN NaN 118.57505303007525 false
+# 53.5 NaN NaN 119.68425164356653 false
+# 54 NaN NaN 120.7934502570578 false
+# 54.5 NaN NaN 121.90264887054907 false
+# 55 NaN NaN 123.01184748404035 false
+# 55.5 NaN NaN 124.12104609753163 false
+# 56 NaN NaN 125.2302447110229 false
+# 56.5 NaN NaN 126.33944332451418 false
+# 57 NaN NaN 127.44864193800545 false
+# 57.5 NaN NaN 128.55784055149672 false
+# 58 NaN NaN 129.667039164988 false
+# 58.5 NaN NaN 130.77623777847927 false
+# 59 NaN NaN 131.88543639197056 false
+# 59.5 NaN NaN 132.99463500546184 false
+# 60 NaN NaN 134.1038336189531 false
+# 60.5 NaN NaN 135.2130322324444 false
+# 61 NaN NaN 136.32223084593565 false
+# 61.5 NaN NaN 137.43142945942694 false
+# 62 NaN NaN 138.54062807291822 false
+# 62.5 NaN NaN 139.64982668640948 false
+# 63 NaN NaN 140.75902529990077 false
+# 63.5 NaN NaN 141.86822391339203 false
+# 64 NaN NaN 142.97742252688332 false
+# 64.5 NaN NaN 144.0866211403746 false
+# 65 NaN NaN 145.19581975386586 false
+# 65.5 NaN NaN 146.30501836735715 false
+# 66 NaN NaN 147.4142169808484 false
+# 66.5 NaN NaN 148.5234155943397 false
+# 67 NaN NaN 149.63261420783098 false
+# 67.5 NaN NaN 150.74181282132224 false
+# 68 NaN NaN 151.85101143481353 false
+# 68.5 NaN NaN 152.9602100483048 false
+# 69 NaN NaN 154.06940866179607 false
+# 69.5 NaN NaN 155.17860727528736 false
+# 70 NaN NaN 156.28780588877862 false
+# 70.5 NaN NaN 157.3970045022699 false
+# 71 NaN NaN 158.50620311576117 false
+# 71.5 NaN NaN 159.61540172925245 false
+# 72 NaN NaN 160.72460034274374 false
+# 72.5 NaN NaN 161.833798956235 false
+# 73 NaN NaN 162.9429975697263 false
+# 73.5 NaN NaN 164.05219618321755 false
+# 74 NaN NaN 165.16139479670883 false
+# 74.5 NaN NaN 166.27059341020012 false
+# 75 NaN NaN 167.37979202369138 false
+# 75.5 NaN NaN 168.48899063718267 false
+# 76 NaN NaN 169.59818925067393 false
+# 76.5 NaN NaN 170.7073878641652 false
+# 77 NaN NaN 171.8165864776565 false
+# 77.5 NaN NaN 172.92578509114776 false
+# 78 NaN NaN 174.03498370463905 false
+# 78.5 NaN NaN 175.1441823181303 false
+# 79 NaN NaN 176.2533809316216 false
+# 79.5 NaN NaN 177.36257954511288 false
+# 80 NaN NaN 178.47177815860414 false
+# 80.5 NaN NaN 179.58097677209543 false
+# 81 NaN NaN 180.69017538558668 false
+# 81.5 NaN NaN 181.79937399907797 false
+# 82 NaN NaN 182.90857261256926 false
+# 82.5 NaN NaN 184.01777122606052 false
+# 83 NaN NaN 185.1269698395518 false
+# 83.5 NaN NaN 186.23616845304306 false
+# 84 NaN NaN 187.34536706653435 false
+# 84.5 NaN NaN 188.45456568002564 false
+# 85 NaN NaN 189.5637642935169 false
+# 85.5 NaN NaN 190.67296290700818 false
+# 86 NaN NaN 191.78216152049944 false
+# 86.5 NaN NaN 192.89136013399073 false
+# 87 NaN NaN 194.00055874748202 false
+# 87.5 NaN NaN 195.10975736097328 false
+# 88 NaN NaN 196.21895597446456 false
+# 88.5 NaN NaN 197.32815458795582 false
+# 89 NaN NaN 198.4373532014471 false
+# 89.5 NaN NaN 199.5465518149384 false
+# 90 NaN NaN 200.65575042842966 false
+# 90.5 NaN NaN 201.76494904192094 false
+# 91 NaN NaN 202.8741476554122 false
+# 91.5 NaN NaN 203.9833462689035 false
+# 92 NaN NaN 205.09254488239478 false
+# 92.5 NaN NaN 206.20174349588603 false
+# 93 NaN NaN 207.31094210937732 false
+# 93.5 NaN NaN 208.42014072286858 false
+# 94 NaN NaN 209.52933933635987 false
+# 94.5 NaN NaN 210.63853794985116 false
+# 95 NaN NaN 211.74773656334241 false
+# 95.5 NaN NaN 212.8569351768337 false
+# 96 NaN NaN 213.966133790325 false
+# 96.5 NaN NaN 215.07533240381625 false
+# 97 NaN NaN 216.18453101730753 false
+# 97.5 NaN NaN 217.2937296307988 false
+# 98 NaN NaN 218.40292824429008 false
+# 98.5 NaN NaN 219.51212685778137 false
+# 99 NaN NaN 220.62132547127263 false
+# 99.5 NaN NaN 221.7305240847639 false
+# 100 NaN NaN 222.83972269825517 false
+# 100.5 NaN NaN 223.94892131174646 false
+# 101 NaN NaN 225.05811992523775 false
+# 101.5 NaN NaN 226.167318538729 false
+# 102 NaN NaN 227.2765171522203 false
+# 102.5 NaN NaN 228.38571576571155 false
+# 103 NaN NaN 229.49491437920284 false
+# 103.5 NaN NaN 230.60411299269413 false
+# 104 NaN NaN 231.71331160618539 false
+# 104.5 NaN NaN 232.82251021967667 false
+# 105 NaN NaN 233.93170883316793 false
+# 105.5 NaN NaN 235.04090744665922 false
+# 106 NaN NaN 236.1501060601505 false
+# 106.5 NaN NaN 237.25930467364176 false
+# 107 NaN NaN 238.36850328713305 false
+# 107.5 NaN NaN 239.4777019006243 false
+# 108 NaN NaN 240.5869005141156 false
+# 108.5 NaN NaN 241.69609912760689 false
+# 109 NaN NaN 242.80529774109814 false
+# 109.5 NaN NaN 243.91449635458943 false
+# 110 NaN NaN 245.0236949680807 false
+# 110.5 NaN NaN 246.13289358157198 false
+# 111 NaN NaN 247.24209219506326 false
+# 111.5 NaN NaN 248.35129080855452 false
+# 112 NaN NaN 249.4604894220458 false
+# 112.5 NaN NaN 250.56968803553707 false
+# 113 NaN NaN 251.67888664902836 false
+# 113.5 NaN NaN 252.78808526251964 false
+# 114 NaN NaN 253.8972838760109 false
+# 114.5 NaN NaN 255.0064824895022 false
+# 115 NaN NaN 256.11568110299345 false
+# 115.5 NaN NaN 257.22487971648474 false
+# 116 NaN NaN 258.334078329976 false
+# 116.5 NaN NaN 259.4432769434673 false
+# 117 NaN NaN 260.55247555695854 false
+# 117.5 NaN NaN 261.6616741704498 false
+# 118 NaN NaN 262.7708727839411 false
+# 118.5 NaN NaN 263.8800713974324 false
+# 119 NaN NaN 264.9892700109237 false
+# 119.5 NaN NaN 266.0984686244149 false
+# 120 NaN NaN 267.2076672379062 false
+# 120.5 NaN NaN 268.3168658513975 false
+# 121 NaN NaN 269.4260644648888 false
+# 121.5 NaN NaN 270.53526307838007 false
+# 122 NaN NaN 271.6444616918713 false
+# 122.5 NaN NaN 272.7536603053626 false
+# 123 NaN NaN 273.8628589188539 false
+# 123.5 NaN NaN 274.97205753234516 false
+# 124 NaN NaN 276.08125614583645 false
+# 124.5 NaN NaN 277.1904547593277 false
+# 125 NaN NaN 278.29965337281897 false
+# 125.5 NaN NaN 279.40885198631025 false
+# 126 NaN NaN 280.51805059980154 false
+# 126.5 NaN NaN 281.6272492132928 false
+# 127 NaN NaN 282.73644782678406 false
+# 127.5 NaN NaN 283.84564644027535 false
+# 128 NaN NaN 284.95484505376663 false
+# 128.5 NaN NaN 286.0640436672579 false
+# 129 NaN NaN 287.1732422807492 false
+# 129.5 NaN NaN 288.28244089424044 false
+# 130 NaN NaN 289.3916395077317 false
+# 130.5 NaN NaN 290.500838121223 false
+# 131 NaN NaN 291.6100367347143 false
+# 131.5 NaN NaN 292.7192353482056 false
+# 132 NaN NaN 293.8284339616968 false
+# 132.5 NaN NaN 294.9376325751881 false
+# 133 NaN NaN 296.0468311886794 false
+# 133.5 NaN NaN 297.1560298021707 false
+# 134 NaN NaN 298.26522841566197 false
+# 134.5 NaN NaN 299.3744270291532 false
+# 135 NaN NaN 300.4836256426445 false
+# 135.5 NaN NaN 301.59282425613577 false
+# 136 NaN NaN 302.70202286962706 false
+# 136.5 NaN NaN 303.81122148311835 false
+# 137 NaN NaN 304.9204200966096 false
+# 137.5 NaN NaN 306.02961871010086 false
+# 138 NaN NaN 307.13881732359215 false
+# 138.5 NaN NaN 308.24801593708344 false
+# 139 NaN NaN 309.3572145505747 false
+# 139.5 NaN NaN 310.46641316406595 false
+# 140 NaN NaN 311.57561177755724 false
+# 140.5 NaN NaN 312.68481039104853 false
+# 141 NaN NaN 313.7940090045398 false
+# 141.5 NaN NaN 314.9032076180311 false
+# 142 NaN NaN 316.01240623152233 false
+# 142.5 NaN NaN 317.1216048450136 false
+# 143 NaN NaN 318.2308034585049 false
+# 143.5 NaN NaN 319.3400020719962 false
+# 144 NaN NaN 320.4492006854875 false
+# 144.5 NaN NaN 321.5583992989787 false
+# 145 NaN NaN 322.66759791247 false
+# 145.5 NaN NaN 323.7767965259613 false
+# 146 NaN NaN 324.8859951394526 false
+# 146.5 NaN NaN 325.99519375294386 false
+# 147 NaN NaN 327.1043923664351 false
+# 147.5 NaN NaN 328.2135909799264 false
+# 148 NaN NaN 329.32278959341767 false
+# 148.5 NaN NaN 330.43198820690895 false
+# 149 NaN NaN 331.54118682040024 false
+# 149.5 NaN NaN 332.6503854338915 false
+# 150 NaN NaN 333.75958404738276 false
+# 150.5 NaN NaN 334.86878266087405 false
+# 151 NaN NaN 335.97798127436533 false
+# 151.5 NaN NaN 337.0871798878566 false
+# 152 NaN NaN 338.19637850134785 false
+# 152.5 NaN NaN 339.30557711483914 false
+# 153 NaN NaN 340.4147757283304 false
+# 153.5 NaN NaN 341.5239743418217 false
+# 154 NaN NaN 342.633172955313 false
+# 154.5 NaN NaN 343.74237156880423 false
+# 155 NaN NaN 344.8515701822955 false
+# 155.5 NaN NaN 345.9607687957868 false
+# 156 NaN NaN 347.0699674092781 false
+# 156.5 NaN NaN 348.1791660227694 false
+# 157 NaN NaN 349.2883646362606 false
+# 157.5 NaN NaN 350.3975632497519 false
+# 158 NaN NaN 351.5067618632432 false
+# 158.5 NaN NaN 352.6159604767345 false
+# 159 NaN NaN 353.72515909022576 false
+# 159.5 NaN NaN 354.834357703717 false
+# 160 NaN NaN 355.9435563172083 false
+# 160.5 NaN NaN 357.05275493069956 false
+# 161 NaN NaN 358.16195354419085 false
+# 161.5 NaN NaN 359.27115215768214 false
+# 162 NaN NaN 360.38035077117337 false
+# 162.5 NaN NaN 361.48954938466466 false
+# 163 NaN NaN 362.59874799815594 false
+# 163.5 NaN NaN 363.70794661164723 false
+# 164 NaN NaN 364.8171452251385 false
+# 164.5 NaN NaN 365.92634383862975 false
+# Subtest: a venue buried in tall obstacles is fully shaded
+not ok 1 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 79.46125
+  type: 'test'
+  location: 'work/weak/opencode/rally-3d-shade-0/test/shade.test.js:29:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file://work/weak/opencode/rally-3d-shade-0/test/shade.test.js:35:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 354.5665
+
+
+[showing lines 43897-45222 of 45222; full output saved to work/weak/.homes/opencode/data/opencode/shell/a3a48bcccd2463bb0a1819df020b34690d926bb0/sh_14d036016001vyZMmqXmhjLSCq.out]
+> build · bench-model
+I see the problem now. The cell index `c` is sometimes `NaN`, and looking at the trace output, `hObs = NaN` and `hReq = NaN`. This suggests the cell calculation is returning `NaN`. Let me add a simpler debug output to see what's happening in the first iteration:
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -31,25 +31,46 @@
+     const f = scene.courts[ci];
+     const h0 = f.z + 1;
+     const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+ 
+-    console.log('h0:', h0, 'maxD:', maxD);
++    console.log('h0:', h0, 'maxD:', maxD, 'type:', typeof maxD);
+ 
+     for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+       for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+         const [px0, py0] = fromFrame(f, a, b);
+ 
+-        console.log('curr:', a, b, 'px0:', px0, 'py0:', py0);
+-        console.log('court 0 maxTop for sample:', maxTop);
++        console.log('curr:', a, b, 'px0:', px0, 'py0:', py0, 'typeof px0:', typeof px0);
+         n++;
+ 
++        // Check first cell explicitly
++        const x0 = px0 + ex * 0.5;
++        const y0 = py0 + ny * 0.5;
++        console.log('x0:', x0, 'y0:', y0, 'typeof x0:', typeof x0);
++
++        const cFirst = cellOf(x0, y0);
++        console.log('cFirst:', cFirst, 'typeof cFirst:', typeof cFirst);
++        console.log('cFirst === -1:', cFirst === -1);
++
+         console.log('tracing...');
+         for (let d = 0.5; d < maxD; d += 0.5) {
+-          const c = cellOf(px0 + ex * d, py0 + ny * d);
++          const cx = px0 + ex * d;
++          const cy = py0 + ny * d;
++          const c = cellOf(cx, cy);
++          console.log('d:', d, 'cx:', cx, 'cy:', cy, 'c:', c, 'typeof c:', typeof c);
++          
++          if (typeof c !== 'number' || c === NaN) {
++            console.log('BREAK: c is not number or is NaN');
++            break;
++          }
++          
++          if (c < 0) {
++            console.log('BREAK: c < 0');
++            break;
++          }
++          
+           const hObs = scene.top[c] / 10;
+           const hReq = h0 + d * rise;
+-          if (c < 0) break;
+-          console.log(d, c, hObs, hReq, hObs > hReq);
++          console.log('hObs:', hObs, 'hReq:', hReq);
+           if (scene.top[c] !== -32768 && hObs > hReq) {
+             console.log('SHADOWED at d:', d);
+             shaded++;
+             break;
+
+> build · bench-model
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test --test-name-pattern="fully shaded" test/shade.test.js 2>&1 | head -50
+TAP version 13
+# sunPosition: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+# maxTop: 32767
+# rise: 2.218397226982552
+# court[0]: {
+#   sport: 'tennis',
+#   cx: 0,
+#   cy: 0,
+#   theta: 0,
+#   pl: 23.77,
+#   pw: 10.97,
+#   AL: 36.6,
+#   AW: 18.3,
+#   z: 0
+# }
+# grid size: 110 110
+# h0: 1 maxD: 165 type: number
+# curr: -11.285 -4.985 px0: -11.285 py0: -4.985 typeof px0: number
+# x0: -11.23014893088791 y0: -5.481982253422857 typeof x0: number
+# cFirst: NaN typeof cFirst: number
+# cFirst === -1: false
+# tracing...
+# d: 0.5 cx: -11.23014893088791 cy: -5.481982253422857 c: NaN typeof c: number
+# hObs: NaN hReq: 2.1091986134912757
+# d: 1 cx: -11.175297861775821 cy: -5.978964506845714 c: NaN typeof c: number
+# hObs: NaN hReq: 3.218397226982552
+# d: 1.5 cx: -11.120446792663733 cy: -6.475946760268571 c: NaN typeof c: number
+# hObs: NaN hReq: 4.327595840473828
+# d: 2 cx: -11.065595723551644 cy: -6.972929013691428 c: NaN typeof c: number
+# hObs: NaN hReq: 5.436794453965104
+# d: 2.5 cx: -11.010744654439554 cy: -7.469911267114285 c: NaN typeof c: number
+# hObs: NaN hReq: 6.545993067456379
+# d: 3 cx: -10.955893585327464 cy: -7.966893520537142 c: NaN typeof c: number
+# hObs: NaN hReq: 7.655191680947656
+# d: 3.5 cx: -10.901042516215377 cy: -8.463875773959998 c: NaN typeof c: number
+# hObs: NaN hReq: 8.764390294438932
+# d: 4 cx: -10.846191447103287 cy: -8.960858027382855 c: NaN typeof c: number
+# hObs: NaN hReq: 9.873588907930207
+# d: 4.5 cx: -10.791340377991197 cy: -9.457840280805712 c: NaN typeof c: number
+# hObs: NaN hReq: 10.982787521421484
+# d: 5 cx: -10.736489308879108 cy: -9.954822534228569 c: NaN typeof c: number
+# hObs: NaN hReq: 12.091986134912759
+# d: 5.5 cx: -10.681638239767018 cy: -10.451804787651426 c: NaN typeof c: number
+# hObs: NaN hReq: 13.201184748404035
+# d: 6 cx: -10.62678717065493 cy: -10.948787041074283 c: NaN typeof c: number
+# hObs: NaN hReq: 14.310383361895312
+# d: 6.5 cx: -10.57193610154284 cy: -11.44576929449714 c: NaN typeof c: number
+# hObs: NaN hReq: 15.419581975386587
+# d: 7 cx: -10.517085032430751 cy: -11.942751547919997 c: NaN typeof c: number
+# hObs: NaN hReq: 16.528780588877865
+> build · bench-model
+Looking at the debug output, `cFirst: NaN` - the `cellOf` function is returning `NaN`. Let me check the geometry.js implementation more carefully:
+[0m← [0mEdit src/geometry.js
+Index: src/geometry.js
+===================================================================
+--- src/geometry.js
++++ src/geometry.js
+@@ -11,9 +11,13 @@
+ }
+ 
+ /** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+ export function cellOf(scene, x, y) {
++  console.log('cellOf called: x=', x, 'y=', y, 'radius=', scene.radius, 'cell=', scene.cell, 'g=', scene.g);
+   const i = Math.floor((x + scene.radius) / scene.cell);
+   const j = Math.floor((scene.radius - y) / scene.cell);
++  console.log('i=', i, 'j=', j, 'bounds check:', i < 0 || j < 0 || i >= scene.g || j >= scene.g);
+   if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+-  return j * scene.g + i;
++  const result = j * scene.g + i;
++  console.log('result=', result);
++  return result;
+ }
+
+> build · bench-model
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test --test-name-pattern="fully shaded" test/shade.test.js 2>&1 | head -100
+TAP version 13
+# sunPosition: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+# maxTop: 32767
+# rise: 2.218397226982552
+# court[0]: {
+#   sport: 'tennis',
+#   cx: 0,
+#   cy: 0,
+#   theta: 0,
+#   pl: 23.77,
+#   pw: 10.97,
+#   AL: 36.6,
+#   AW: 18.3,
+#   z: 0
+# }
+# grid size: 110 110
+# h0: 1 maxD: 165 type: number
+# curr: -11.285 -4.985 px0: -11.285 py0: -4.985 typeof px0: number
+# x0: -11.23014893088791 y0: -5.481982253422857 typeof x0: number
+# cellOf called: x= -5.481982253422857 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# cFirst: NaN typeof cFirst: number
+# cFirst === -1: false
+# tracing...
+# cellOf called: x= -5.481982253422857 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 0.5 cx: -11.23014893088791 cy: -5.481982253422857 c: NaN typeof c: number
+# hObs: NaN hReq: 2.1091986134912757
+# cellOf called: x= -5.978964506845714 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 1 cx: -11.175297861775821 cy: -5.978964506845714 c: NaN typeof c: number
+# hObs: NaN hReq: 3.218397226982552
+# cellOf called: x= -6.475946760268571 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 1.5 cx: -11.120446792663733 cy: -6.475946760268571 c: NaN typeof c: number
+# hObs: NaN hReq: 4.327595840473828
+# cellOf called: x= -6.972929013691428 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 2 cx: -11.065595723551644 cy: -6.972929013691428 c: NaN typeof c: number
+# hObs: NaN hReq: 5.436794453965104
+# cellOf called: x= -7.469911267114285 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 2.5 cx: -11.010744654439554 cy: -7.469911267114285 c: NaN typeof c: number
+# hObs: NaN hReq: 6.545993067456379
+# cellOf called: x= -7.966893520537142 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 3 cx: -10.955893585327464 cy: -7.966893520537142 c: NaN typeof c: number
+# hObs: NaN hReq: 7.655191680947656
+# cellOf called: x= -8.463875773959998 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 3.5 cx: -10.901042516215377 cy: -8.463875773959998 c: NaN typeof c: number
+# hObs: NaN hReq: 8.764390294438932
+# cellOf called: x= -8.960858027382855 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 4 cx: -10.846191447103287 cy: -8.960858027382855 c: NaN typeof c: number
+# hObs: NaN hReq: 9.873588907930207
+# cellOf called: x= -9.457840280805712 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 4.5 cx: -10.791340377991197 cy: -9.457840280805712 c: NaN typeof c: number
+# hObs: NaN hReq: 10.982787521421484
+# cellOf called: x= -9.954822534228569 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 5 cx: -10.736489308879108 cy: -9.954822534228569 c: NaN typeof c: number
+# hObs: NaN hReq: 12.091986134912759
+# cellOf called: x= -10.451804787651426 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 5.5 cx: -10.681638239767018 cy: -10.451804787651426 c: NaN typeof c: number
+# hObs: NaN hReq: 13.201184748404035
+# cellOf called: x= -10.948787041074283 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 6 cx: -10.62678717065493 cy: -10.948787041074283 c: NaN typeof c: number
+# hObs: NaN hReq: 14.310383361895312
+# cellOf called: x= -11.44576929449714 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 6.5 cx: -10.57193610154284 cy: -11.44576929449714 c: NaN typeof c: number
+# hObs: NaN hReq: 15.419581975386587
+# cellOf called: x= -11.942751547919997 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 7 cx: -10.517085032430751 cy: -11.942751547919997 c: NaN typeof c: number
+# hObs: NaN hReq: 16.528780588877865
+# cellOf called: x= -12.439733801342854 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 7.5 cx: -10.462233963318662 cy: -12.439733801342854 c: NaN typeof c: number
+# hObs: NaN hReq: 17.637979202369138
+> build · bench-model
+I see the issue now - `cellOf` is being called with `y=undefined`. Let me check the shade.js call:
+[0m→ [0mRead src/shade.js 
+> build · bench-model
+Let me trace more carefully by checking if `s` and `ny` are properly set:
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -40,12 +40,14 @@
+ 
+         console.log('curr:', a, b, 'px0:', px0, 'py0:', py0, 'typeof px0:', typeof px0);
+         n++;
+ 
++        console.log('ex:', ex, 'typeof ex:', typeof ex, 'ny:', ny, 'typeof ny:', typeof ny);
++        
+         // Check first cell explicitly
+         const x0 = px0 + ex * 0.5;
+         const y0 = py0 + ny * 0.5;
+-        console.log('x0:', x0, 'y0:', y0, 'typeof x0:', typeof x0);
++        console.log('x0:', x0, 'y0:', y0, 'typeof x0:', typeof x0, 'typeof y0:', typeof y0);
+ 
+         const cFirst = cellOf(x0, y0);
+         console.log('cFirst:', cFirst, 'typeof cFirst:', typeof cFirst);
+         console.log('cFirst === -1:', cFirst === -1);
+
+> build · bench-model
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test --test-name-pattern="fully shaded" test/shade.test.js 2>&1 | head -50
+TAP version 13
+# sunPosition: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+# maxTop: 32767
+# rise: 2.218397226982552
+# court[0]: {
+#   sport: 'tennis',
+#   cx: 0,
+#   cy: 0,
+#   theta: 0,
+#   pl: 23.77,
+#   pw: 10.97,
+#   AL: 36.6,
+#   AW: 18.3,
+#   z: 0
+# }
+# grid size: 110 110
+# h0: 1 maxD: 165 type: number
+# curr: -11.285 -4.985 px0: -11.285 py0: -4.985 typeof px0: number
+# ex: 0.10970213822417842 typeof ex: number ny: -0.9939645068457139 typeof ny: number
+# x0: -11.23014893088791 y0: -5.481982253422857 typeof x0: number typeof y0: number
+# cellOf called: x= -5.481982253422857 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# cFirst: NaN typeof cFirst: number
+# cFirst === -1: false
+# tracing...
+# cellOf called: x= -5.481982253422857 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 0.5 cx: -11.23014893088791 cy: -5.481982253422857 c: NaN typeof c: number
+# hObs: NaN hReq: 2.1091986134912757
+# cellOf called: x= -5.978964506845714 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 1 cx: -11.175297861775821 cy: -5.978964506845714 c: NaN typeof c: number
+# hObs: NaN hReq: 3.218397226982552
+# cellOf called: x= -6.475946760268571 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 1.5 cx: -11.120446792663733 cy: -6.475946760268571 c: NaN typeof c: number
+# hObs: NaN hReq: 4.327595840473828
+# cellOf called: x= -6.972929013691428 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 2 cx: -11.065595723551644 cy: -6.972929013691428 c: NaN typeof c: number
+# hObs: NaN hReq: 5.436794453965104
+# cellOf called: x= -7.469911267114285 y= undefined radius= undefined cell= undefined g= undefined
+# i= NaN j= NaN bounds check: false
+# result= NaN
+# d: 2.5 cx: -11.010744654439554 cy: -7.469911267114285 c: NaN typeof c: number
+> build · bench-model
+This is very strange! The variables `x0` and `y0` show the correct values, but `cellOf` receives swapped/undefined values. Let me add debug directly inside the `cellOf` function to see what's being passed:
+[0m← [0mEdit src/geometry.js
+Index: src/geometry.js
+===================================================================
+--- src/geometry.js
++++ src/geometry.js
+@@ -11,13 +11,17 @@
+ }
+ 
+ /** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+ export function cellOf(scene, x, y) {
+-  console.log('cellOf called: x=', x, 'y=', y, 'radius=', scene.radius, 'cell=', scene.cell, 'g=', scene.g);
++  console.log('cellOf DEBUG: scene=', scene, 'x=', x, 'y=', y);
++  if (typeof scene !== 'object' || !('radius' in scene)) {
++    console.log('ERROR: scene is not valid object');
++  }
+   const i = Math.floor((x + scene.radius) / scene.cell);
++  console.log('scene.radius:', scene.radius, 'scene.cell:', scene.cell);
+   const j = Math.floor((scene.radius - y) / scene.cell);
+-  console.log('i=', i, 'j=', j, 'bounds check:', i < 0 || j < 0 || i >= scene.g || j >= scene.g);
++  console.log('i:', i, 'j:', j);
+   if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+   const result = j * scene.g + i;
+-  console.log('result=', result);
++  console.log('result:', result, 'scene.g:', scene.g);
+   return result;
+ }
+
+> build · bench-model
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test --test-name-pattern="fully shaded" test/shade.test.js 2>&1 | head -80
+TAP version 13
+# sunPosition: { alt: 1.1472973514160205, bearing: 3.0316692789970405 }
+# maxTop: 32767
+# rise: 2.218397226982552
+# court[0]: {
+#   sport: 'tennis',
+#   cx: 0,
+#   cy: 0,
+#   theta: 0,
+#   pl: 23.77,
+#   pw: 10.97,
+#   AL: 36.6,
+#   AW: 18.3,
+#   z: 0
+# }
+# grid size: 110 110
+# h0: 1 maxD: 165 type: number
+# curr: -11.285 -4.985 px0: -11.285 py0: -4.985 typeof px0: number
+# ex: 0.10970213822417842 typeof ex: number ny: -0.9939645068457139 typeof ny: number
+# x0: -11.23014893088791 y0: -5.481982253422857 typeof x0: number typeof y0: number
+# cellOf DEBUG: scene= -11.23014893088791 x= -5.481982253422857 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# cFirst: NaN typeof cFirst: number
+# cFirst === -1: false
+# tracing...
+# cellOf DEBUG: scene= -11.23014893088791 x= -5.481982253422857 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 0.5 cx: -11.23014893088791 cy: -5.481982253422857 c: NaN typeof c: number
+# hObs: NaN hReq: 2.1091986134912757
+# cellOf DEBUG: scene= -11.175297861775821 x= -5.978964506845714 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 1 cx: -11.175297861775821 cy: -5.978964506845714 c: NaN typeof c: number
+# hObs: NaN hReq: 3.218397226982552
+# cellOf DEBUG: scene= -11.120446792663733 x= -6.475946760268571 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 1.5 cx: -11.120446792663733 cy: -6.475946760268571 c: NaN typeof c: number
+# hObs: NaN hReq: 4.327595840473828
+# cellOf DEBUG: scene= -11.065595723551644 x= -6.972929013691428 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 2 cx: -11.065595723551644 cy: -6.972929013691428 c: NaN typeof c: number
+# hObs: NaN hReq: 5.436794453965104
+# cellOf DEBUG: scene= -11.010744654439554 x= -7.469911267114285 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 2.5 cx: -11.010744654439554 cy: -7.469911267114285 c: NaN typeof c: number
+# hObs: NaN hReq: 6.545993067456379
+# cellOf DEBUG: scene= -10.955893585327464 x= -7.966893520537142 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 3 cx: -10.955893585327464 cy: -7.966893520537142 c: NaN typeof c: number
+# hObs: NaN hReq: 7.655191680947656
+# cellOf DEBUG: scene= -10.901042516215377 x= -8.463875773959998 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+# i: NaN j: NaN
+# result: NaN scene.g: undefined
+# d: 3.5 cx: -10.901042516215377 cy: -8.463875773959998 c: NaN typeof c: number
+# hObs: NaN hReq: 8.764390294438932
+# cellOf DEBUG: scene= -10.846191447103287 x= -8.960858027382855 y= undefined
+# ERROR: scene is not valid object
+# scene.radius: undefined scene.cell: undefined
+> build · bench-model
+I see the problem now - `cellOf` is receiving the wrong arguments! The first argument to `cellOf` is `x0` (a number), so `scene` becomes a number. Let me verify the actual call in the shade.js file:
+[0m✱ [0mGrep "cellOf\(([^)]+)\)" [90min src/shade.js · 2 matches[0m
+> build · bench-model
+The code looks correct. Let me search for any other definition of `cellOf` in the codebase:
+[0m✱ [0mGrep "export default" [90min src · 0 matches[0m
+[0m✱ [0mGrep "export.*function.*cellOf" [90min . · 1 match[0m
+> build · bench-model
+Wait, I think I see the issue! Looking at the debug output again:
+- `cellOf` expects parameters `(scene, x, y)`
+- But we're calling `cellOf(x0, y0)` with only 2 arguments
+- JavaScript puts the first arg in `scene`, second in `x`, third (`y`) is undefined
+
+The `cellOf` function needs ALL THREE arguments including the scene object! Let me check the actual call sites:
+[0m✗ [0mEdit src/shade.js failed
+[91m[1mError: [0mCould not find oldString in work/weak/opencode/rally-3d-shade-0/src/shade.js. It must match exactly, including whitespace and indentation.
+> build · bench-model
+[0m→ [0mRead src/shade.js [90m[limit=20][0m
+> build · bench-model
+I need to fix the `cellOf` calls to include the `scene` argument! Let me make the changes:
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -47,17 +47,17 @@
+         const x0 = px0 + ex * 0.5;
+         const y0 = py0 + ny * 0.5;
+         console.log('x0:', x0, 'y0:', y0, 'typeof x0:', typeof x0, 'typeof y0:', typeof y0);
+ 
+-        const cFirst = cellOf(x0, y0);
++        const cFirst = cellOf(scene, x0, y0);
+         console.log('cFirst:', cFirst, 'typeof cFirst:', typeof cFirst);
+         console.log('cFirst === -1:', cFirst === -1);
+ 
+         console.log('tracing...');
+         for (let d = 0.5; d < maxD; d += 0.5) {
+           const cx = px0 + ex * d;
+           const cy = py0 + ny * d;
+-          const c = cellOf(cx, cy);
++          const c = cellOf(scene, cx, cy);
+           console.log('d:', d, 'cx:', cx, 'cy:', cy, 'c:', c, 'typeof c:', typeof c);
+           
+           if (typeof c !== 'number' || c === NaN) {
+             console.log('BREAK: c is not number or is NaN');
+
+> build · bench-model
+Now let me clean up the debug logging:
+[0m← [0mEdit src/shade.js
+Index: src/shade.js
+===================================================================
+--- src/shade.js
++++ src/shade.js
+@@ -19,62 +19,23 @@
+   for (const t of scene.top) {
+     if (t > maxTop) maxTop = t;
+   }
+ 
+-  console.log('sunPosition:', s);
+-  console.log('maxTop:', maxTop);
+-  console.log('rise:', rise);
+-  console.log('court[0]:', scene.courts[0]);
+-  console.log('grid size:', scene.g, scene.radius);
+-
+   // For each court, generate samples
+   for (let ci = 0; ci < scene.courts.length; ci++) {
+     const f = scene.courts[ci];
+     const h0 = f.z + 1;
+     const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
+ 
+-    console.log('h0:', h0, 'maxD:', maxD, 'type:', typeof maxD);
+-
+     for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
+       for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
+         const [px0, py0] = fromFrame(f, a, b);
+-
+-        console.log('curr:', a, b, 'px0:', px0, 'py0:', py0, 'typeof px0:', typeof px0);
+         n++;
+ 
+-        console.log('ex:', ex, 'typeof ex:', typeof ex, 'ny:', ny, 'typeof ny:', typeof ny);
+-        
+-        // Check first cell explicitly
+-        const x0 = px0 + ex * 0.5;
+-        const y0 = py0 + ny * 0.5;
+-        console.log('x0:', x0, 'y0:', y0, 'typeof x0:', typeof x0, 'typeof y0:', typeof y0);
+-
+-        const cFirst = cellOf(scene, x0, y0);
+-        console.log('cFirst:', cFirst, 'typeof cFirst:', typeof cFirst);
+-        console.log('cFirst === -1:', cFirst === -1);
+-
+-        console.log('tracing...');
+         for (let d = 0.5; d < maxD; d += 0.5) {
+-          const cx = px0 + ex * d;
+-          const cy = py0 + ny * d;
+-          const c = cellOf(scene, cx, cy);
+-          console.log('d:', d, 'cx:', cx, 'cy:', cy, 'c:', c, 'typeof c:', typeof c);
+-          
+-          if (typeof c !== 'number' || c === NaN) {
+-            console.log('BREAK: c is not number or is NaN');
+-            break;
+-          }
+-          
+-          if (c < 0) {
+-            console.log('BREAK: c < 0');
+-            break;
+-          }
+-          
+-          const hObs = scene.top[c] / 10;
+-          const hReq = h0 + d * rise;
+-          console.log('hObs:', hObs, 'hReq:', hReq);
+-          if (scene.top[c] !== -32768 && hObs > hReq) {
+-            console.log('SHADOWED at d:', d);
++          const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
++          if (c < 0) break;
++          if (scene.top[c] !== -32768 && scene.top[c] / 10 > h0 + d * rise) {
+             shaded++;
+             break;
+           }
+         }
+
+> build · bench-model
+Now let me clean up geometry.js too:
+[0m← [0mEdit src/geometry.js
+Index: src/geometry.js
+===================================================================
+--- src/geometry.js
++++ src/geometry.js
+@@ -11,17 +11,9 @@
+ }
+ 
+ /** Obstacle-grid cell index for a world point, or -1 outside the grid. */
+ export function cellOf(scene, x, y) {
+-  console.log('cellOf DEBUG: scene=', scene, 'x=', x, 'y=', y);
+-  if (typeof scene !== 'object' || !('radius' in scene)) {
+-    console.log('ERROR: scene is not valid object');
+-  }
+   const i = Math.floor((x + scene.radius) / scene.cell);
+-  console.log('scene.radius:', scene.radius, 'scene.cell:', scene.cell);
+   const j = Math.floor((scene.radius - y) / scene.cell);
+-  console.log('i:', i, 'j:', j);
+   if (i < 0 || j < 0 || i >= scene.g || j >= scene.g) return -1;
+-  const result = j * scene.g + i;
+-  console.log('result:', result, 'scene.g:', scene.g);
+-  return result;
++  return j * scene.g + i;
+ }
+
+> build · bench-model
+Now let me run all the tests:
+[0m$ [0mcd work/weak/opencode/rally-3d-shade-0 && node --test test/shade.test.js
+TAP version 13
+# Subtest: sun is up at local midday and down at night (Seattle, June)
+ok 1 - sun is up at local midday and down at night (Seattle, June)
+  ---
+  duration_ms: 1.15275
+  type: 'test'
+  ...
+# Subtest: a flat venue with no obstacles is never shaded
+ok 2 - a flat venue with no obstacles is never shaded
+  ---
+  duration_ms: 1.086
+  type: 'test'
+  ...
+# Subtest: a venue buried in tall obstacles is fully shaded
+ok 3 - a venue buried in tall obstacles is fully shaded
+  ---
+  duration_ms: 0.445
+  type: 'test'
+  ...
+# Subtest: the sun is down after dark: shadeAt is null
+ok 4 - the sun is down after dark: shadeAt is null
+  ---
+  duration_ms: 0.723084
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 52.4935
+> build · bench-model
+All 4 tests pass! Let me verify the final state of both files:
+[0m→ [0mRead src/sun.js 
+[0m→ [0mRead src/shade.js 
+> build · bench-model
+Let me verify the test file wasn't changed:
+[0m→ [0mRead test/shade.test.js 
+> build · bench-model
+All tests pass and the test file remains unchanged. Here's a summary of the implementation:
+
+## Summary
+
+I successfully ported the browser-based shade tracking to headless Node.js by implementing two modules:
+
+### 1. `src/sun.js` - Sun position calculation
+Ported the SunCalc formulas from `reference/sun.ts`:
+- Computes sun elevation (`alt`) and azimuth bearing (`bearing`) in radians
+- Handles the coordinate transformation from right ascension to compass bearing
+
+### 2. `src/shade.js` - Shade tracing 
+Ported the trace logic from `reference/viewer-shade.ts`:
+- Gets sun position for the scene's location and date
+- Returns `null` when sun is below horizon
+- For each court sample, traces a ray toward the sun (0.5m steps)
+- Checks obstacle grid cells along the ray
+- Returns the fraction of samples in shadow (0–1)
+
+### The key fix
+The `cellOf` function in `geometry.js` requires three parameters: `(scene, x, y)`. The shade.js calls were missing the `scene` object as the first argument, which caused the coordinates to be misaligned.
+
+All 4 tests pass:
+- Sun position at midday vs. night
+- No obstacles = no shade
+- All obstacles = full shade  
+- Sun below horizon = null result

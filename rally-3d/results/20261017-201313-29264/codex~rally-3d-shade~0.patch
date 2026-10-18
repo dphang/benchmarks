@@ -1,0 +1,78 @@
+diff --git a/src/shade.js b/src/shade.js
+index 368044e..8484d9b 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -5,5 +5,44 @@ import { fromFrame, cellOf } from './geometry.js';
+ // sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++
++  // Compute maxTop from the gz top array (decimetres)
++  const maxTop = Math.max(...scene.top);
++
++  let shaded = 0;
++  let total = 0;
++
++  for (const court of scene.courts) {
++    const h0 = court.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    // Sample points in court frame: a along length, b across
++    for (let a = -court.pl / 2 + 0.6; a <= court.pl / 2; a += 1.4) {
++      for (let b = -court.pw / 2 + 0.5; b <= court.pw / 2; b += 1.4) {
++        const [px, py] = fromFrame(court, a, b);
++        total++;
++
++        // Walk toward the sun from d = 0.5
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const cx = px + ex * d;
++          const cy = py + ny * d;
++          const c = cellOf(scene, cx, cy);
++          if (c < 0) break;
++          const topHeight = scene.top[c] / 10; // decimetres -> metres
++          if (topHeight > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return total ? shaded / total : 0;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index 4e9c04e..00731fe 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,6 +1,22 @@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+ // Port reference/sun.ts. Not implemented yet.
+ 
++const rad = Math.PI / 180;
++
++/** Elevation above the horizon (radians), compass bearing toward the sun (radians clockwise from north). */
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = rad * (357.5291 + 0.98560028 * d);
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + rad * 102.9372 + Math.PI;
++  const e = rad * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = rad * (280.16 + 360.9856235 * d) + rad * lng - ra;
++  const phi = rad * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }

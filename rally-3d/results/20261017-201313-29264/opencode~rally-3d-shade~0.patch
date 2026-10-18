@@ -1,0 +1,85 @@
+diff --git a/src/shade.js b/src/shade.js
+index 368044e..857121d 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -2,8 +2,48 @@ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+ // Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Port the trace in reference/viewer-shade.ts. Not implemented yet.
++// sun is down. Port the trace in reference/viewer-shade.ts.
+ 
+-export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++function shadeAt(scene, date) {
++  const s = sunPosition(date, scene.lat, scene.lng);
++  if (s.alt <= 0) return null;
++
++  const ex = Math.sin(s.bearing);
++  const ny = Math.cos(s.bearing);
++  const rise = Math.tan(s.alt);
++  let shaded = 0;
++  let n = 0;
++
++  // Find maxTop - the tallest obstacle in the venue
++  let maxTop = -32768;
++  for (const t of scene.top) {
++    if (t > maxTop) maxTop = t;
++  }
++
++  // For each court, generate samples
++  for (let ci = 0; ci < scene.courts.length; ci++) {
++    const f = scene.courts[ci];
++    const h0 = f.z + 1;
++    const maxD = Math.min(scene.radius * 1.5, (maxTop - h0) / rise);
++
++    for (let a = -f.pl / 2 + 0.6; a <= f.pl / 2; a += 1.4) {
++      for (let b = -f.pw / 2 + 0.5; b <= f.pw / 2; b += 1.4) {
++        const [px0, py0] = fromFrame(f, a, b);
++        n++;
++
++        for (let d = 0.5; d < maxD; d += 0.5) {
++          const c = cellOf(scene, px0 + ex * d, py0 + ny * d);
++          if (c < 0) break;
++          if (scene.top[c] !== -32768 && scene.top[c] / 10 > h0 + d * rise) {
++            shaded++;
++            break;
++          }
++        }
++      }
++    }
++  }
++
++  return n ? shaded / n : 0;
+ }
++
++export { shadeAt };
+diff --git a/src/sun.js b/src/sun.js
+index 4e9c04e..9de8be7 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,6 +1,21 @@
+ // Sun position (the SunCalc formulas), as the 3D view uses them.
+-// Port reference/sun.ts. Not implemented yet.
++// Port reference/sun.ts.
+ 
+-export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++function sunPosition(date, lat, lng) {
++  const d = date.valueOf() / 86_400_000 - 0.5 + 2_440_588 - 2_451_545;
++  const M = (Math.PI / 180) * (357.5291 + 0.98560028 * d);
++  const C = (Math.PI / 180) * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const L = M + C + (Math.PI / 180) * 102.9372 + Math.PI;
++  const e = (Math.PI / 180) * 23.4397;
++  const dec = Math.asin(Math.sin(e) * Math.sin(L));
++  const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++  const H = (Math.PI / 180) * (280.16 + 360.9856235 * d) + (Math.PI / 180) * lng - ra;
++  const phi = (Math.PI / 180) * lat;
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
++  return { alt, bearing: (az + Math.PI) % (2 * Math.PI) };
+ }
++
++export { sunPosition };

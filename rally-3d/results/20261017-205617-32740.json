@@ -1,0 +1,371 @@
+{
+  "model": "bench-model",
+  "ctx": 32768,
+  "offline": false,
+  "meta": {
+    "started_at": "2026-10-17T20:56:18-0700",
+    "command": [
+      "run.py",
+      "--api",
+      "http://localhost:4000",
+      "--meter",
+      "http://localhost:4102",
+      "--meter-log",
+      "rally-3d/meter-strong.jsonl",
+      "--model",
+      "bench-model",
+      "--agents",
+      "opencode,claude,codex,goose,aider,qwen,crush",
+      "--timeout",
+      "600",
+      "--seed",
+      "11",
+      "--tasks",
+      "rally-3d-shade"
+    ],
+    "bench_commit": null,
+    "bench_dirty": true,
+    "agent_versions": {
+      "opencode": "PlatformError: Unknown: FileSystem.open (~/.local/share/opencode/log/opencode.log)",
+      "claude": "2.1.302 (Claude Code)",
+      "codex": "codex-cli 0.162.1",
+      "goose": "1.54.0",
+      "aider": "aider 0.86.2",
+      "qwen": "0.25.1",
+      "crush": "crush version v0.98.1"
+    },
+    "model_alias": "bench-model",
+    "upstream_model": "deepseek/deepseek-flash",
+    "proxy": "LiteLLM: Current Version = 1.105.0",
+    "platform": {
+      "system": "macOS-26.3-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpus": 10,
+      "python": "3.12.5"
+    },
+    "offline_sandbox": false,
+    "timeout_s": 600,
+    "seed": 11,
+    "repeat": 1,
+    "tasks": {
+      "rally-3d-shade": "c6cce51e61de359c7cd0a41425d4c28641345d589306e06d7c9a17021edffc5b"
+    }
+  },
+  "results": [
+    {
+      "agent": "claude",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 26.2,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.063708\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 0.574292\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 1.092666\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.518375\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 56.19975\nall 36 cases match within 0.01\n",
+      "tokens": {
+        "in": 22531,
+        "out": 4527
+      },
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 7,
+        "input": 151043,
+        "output": 4527,
+        "cached": 128512
+      },
+      "meter_label": "claude~rally-3d-shade~0~5e7df64c",
+      "started_at": "2026-10-17T20:56:24-0700",
+      "ended_at": "2026-10-17T20:56:51-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/claude~rally-3d-shade~0.out",
+          "sha256": "a1a8b65317c6ea717daebc52b4ef2cf8c97270e86d26b541f9cbaa65b9ae7e73"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/claude~rally-3d-shade~0.patch",
+          "sha256": "f1cd6bfa73239cdf750eb8078d360d89c418ec752adb1db714606f48fe84ab3e"
+        },
+        "check": {
+          "file": "20261017-205617-32740/claude~rally-3d-shade~0.check.txt",
+          "sha256": "e2de34b7538da4be60f9ba07f12974fec7c6f139f0571873d2b4cde83761ccfe"
+        },
+        "session0": {
+          "file": "20261017-205617-32740/claude~rally-3d-shade~0.session0.jsonl",
+          "sha256": "6a503dca97401e817465efb7963fb9e2d27b7ccbc191fea720d52a0c18ecd311"
+        }
+      }
+    },
+    {
+      "agent": "opencode",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 53.9,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.174208\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 1.530708\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.516792\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.762125\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 55.776291\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 13,
+        "input": 192807,
+        "output": 9527,
+        "cached": 182272
+      },
+      "meter_label": "opencode~rally-3d-shade~0~976184c3",
+      "started_at": "2026-10-17T20:56:52-0700",
+      "ended_at": "2026-10-17T20:57:47-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/opencode~rally-3d-shade~0.out",
+          "sha256": "15b473afe525e43468c93ae0c959a9c0a8f6c3fe48fda826666af3f46b53f094"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/opencode~rally-3d-shade~0.patch",
+          "sha256": "4437eb89a43014aa4d5ce958a02b9de712b97a9e4cbb4de603f7150a664995a7"
+        },
+        "check": {
+          "file": "20261017-205617-32740/opencode~rally-3d-shade~0.check.txt",
+          "sha256": "718442d37ab5b4055e5eb9c3b4c46c1bc40b456b5ab54c8c1273e919ea6e5622"
+        }
+      }
+    },
+    {
+      "agent": "codex",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 28.9,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 0.933291\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 0.621875\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.300375\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.859292\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 54.862958\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 7,
+        "input": 107703,
+        "output": 6310,
+        "cached": 0
+      },
+      "meter_label": "codex~rally-3d-shade~0~a67a1866",
+      "started_at": "2026-10-17T20:57:48-0700",
+      "ended_at": "2026-10-17T20:58:18-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/codex~rally-3d-shade~0.out",
+          "sha256": "a530fe5ba9d1b1f92be40558010b25aeab5d1fd321cd372f40b2ce64d5944732"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/codex~rally-3d-shade~0.patch",
+          "sha256": "a1cddf6f1c4172eb1743982a0b93f6e7483debb9eb09e10c459425bad7039fc5"
+        },
+        "check": {
+          "file": "20261017-205617-32740/codex~rally-3d-shade~0.check.txt",
+          "sha256": "9976ce4ffe6a2f18b4ac899f5eedd5b83af41f79859bbf0c399b06dc517d87a2"
+        },
+        "session0": {
+          "file": "20261017-205617-32740/codex~rally-3d-shade~0.session0.jsonl",
+          "sha256": "dcd1fda00084818e63c598eee7f7ac03ea82820a7b443a985b6035fa98eeae4b"
+        },
+        "session1": {
+          "file": "20261017-205617-32740/codex~rally-3d-shade~0.session1.jsonl",
+          "sha256": "3865fc00876e9dcd1e325481dacd9d0f8bc4c78f4835f6710bfbe76fe833c72d"
+        }
+      }
+    },
+    {
+      "agent": "qwen",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 37.8,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.081583\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 1.313792\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.9785\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.492042\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 57.499708\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 9,
+        "input": 160997,
+        "output": 6564,
+        "cached": 132480
+      },
+      "meter_label": "qwen~rally-3d-shade~0~93acc83e",
+      "started_at": "2026-10-17T20:58:19-0700",
+      "ended_at": "2026-10-17T20:58:58-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/qwen~rally-3d-shade~0.out",
+          "sha256": "db41abd476ef651f5ad6e52917d090750f4eda8ef83d01354664ff02cd15aafc"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/qwen~rally-3d-shade~0.patch",
+          "sha256": "fcd50a183322355772aa08d410376496c44669f064c795893a4a552b567a0a00"
+        },
+        "check": {
+          "file": "20261017-205617-32740/qwen~rally-3d-shade~0.check.txt",
+          "sha256": "d788b3dff54f9e6ce850e4b252bf32177a4a2cbcacac1637d908a9f7c714270b"
+        },
+        "session0": {
+          "file": "20261017-205617-32740/qwen~rally-3d-shade~0.session0.jsonl",
+          "sha256": "91657cc5b91535591e20def76ed7ac2250b1e705540ff58ba8caac60eb2a892d"
+        },
+        "session1": {
+          "file": "20261017-205617-32740/qwen~rally-3d-shade~0.session1.jsonl",
+          "sha256": "1eed6c3db7c16376b5433dc79ce1685ba9b07886ec71f90f11916948489cba2e"
+        }
+      }
+    },
+    {
+      "agent": "crush",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 27.8,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.158625\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 0.824875\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.95525\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.447125\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 57.041917\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 15,
+        "input": 259332,
+        "output": 3484,
+        "cached": 242560
+      },
+      "meter_label": "crush~rally-3d-shade~0~bce3d79f",
+      "started_at": "2026-10-17T20:58:59-0700",
+      "ended_at": "2026-10-17T20:59:28-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/crush~rally-3d-shade~0.out",
+          "sha256": "7947988b2317a95de46dd6c4ca386d6ae9999dab4d0e214857fae59ddbece931"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/crush~rally-3d-shade~0.patch",
+          "sha256": "91eb332247eea39a1c3915579a7e7e426bfac95f4db1e01ec7394027b72e2c88"
+        },
+        "check": {
+          "file": "20261017-205617-32740/crush~rally-3d-shade~0.check.txt",
+          "sha256": "dc8a3ba6d6a17a8c4152d3cca56e83ea399e6748b690607f351c615332b7b0ba"
+        }
+      }
+    },
+    {
+      "agent": "aider",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 28.9,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.0965\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 0.647167\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.346\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.999833\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 55.409333\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 3,
+        "input": 101080,
+        "output": 5923,
+        "cached": 2816
+      },
+      "meter_label": "aider~rally-3d-shade~0~3f85c948",
+      "started_at": "2026-10-17T20:59:29-0700",
+      "ended_at": "2026-10-17T20:59:59-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/aider~rally-3d-shade~0.out",
+          "sha256": "3ea62933d41135f5e6dd952a409cd4bfc66b9e8fb1bdde341a50da8774238c56"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/aider~rally-3d-shade~0.patch",
+          "sha256": "a40184fd9772024ea7f92076eee1360ca855d9771ec7b9efb5651db584757bde"
+        },
+        "check": {
+          "file": "20261017-205617-32740/aider~rally-3d-shade~0.check.txt",
+          "sha256": "8fabbfd8481de92623cde83b1a0a34b8999d0bf5a14ed1e832cd93e030d6a23a"
+        }
+      }
+    },
+    {
+      "agent": "goose",
+      "task": "rally-3d-shade",
+      "rep": 0,
+      "passed": true,
+      "seconds": 46.0,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  duration_ms: 1.105167\n  type: 'test'\n  ...\n# Subtest: a flat venue with no obstacles is never shaded\nok 2 - a flat venue with no obstacles is never shaded\n  ---\n  duration_ms: 0.98\n  type: 'test'\n  ...\n# Subtest: a venue buried in tall obstacles is fully shaded\nok 3 - a venue buried in tall obstacles is fully shaded\n  ---\n  duration_ms: 0.48225\n  type: 'test'\n  ...\n# Subtest: the sun is down after dark: shadeAt is null\nok 4 - the sun is down after dark: shadeAt is null\n  ---\n  duration_ms: 0.916208\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 55.130833\nall 36 cases match within 0.01\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 14,
+        "input": 177072,
+        "output": 7798,
+        "cached": 169472
+      },
+      "meter_label": "goose~rally-3d-shade~0~cbcc91b8",
+      "started_at": "2026-10-17T20:59:59-0700",
+      "ended_at": "2026-10-17T21:00:47-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.out",
+          "sha256": "cfe5e6ec3acc60544e9fd25fa61025a715d54e69cc55023d98d759fce779e86f"
+        },
+        "patch": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.patch",
+          "sha256": "d08e014f48fa18748f29cbc796b90eacee677fb5ffd5c163cf997e4945c48eee"
+        },
+        "check": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.check.txt",
+          "sha256": "c970955ae52ff27418ddde4908f1c9f07b1ffd64defa8b1b09a0dc883103b26c"
+        },
+        "session0": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session0.jsonl",
+          "sha256": "b9def346bd2815e4c01b949f249f52a7e360355ef5c347cd824e0be6bb742132"
+        },
+        "session1": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session1.jsonl",
+          "sha256": "46c3a77a73365f2284d98dc5e229a03c54637b418073d042d5313d269bbb71d8"
+        },
+        "session2": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session2.jsonl",
+          "sha256": "fbabf4616234b6bfe2db049c8d3aa8e75364c7d273fa5326fc663864774a8829"
+        },
+        "session3": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session3.jsonl",
+          "sha256": "03b71962d2aad602442b7ec57097c2b5b9879c2e6e643fc604c3c6f7fd548685"
+        },
+        "session4": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session4.jsonl",
+          "sha256": "c20ba25f9877dbe89870fe21bfaffc3be30dd84b4d66284039ca07753c53b584"
+        },
+        "session5": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session5.jsonl",
+          "sha256": "17c0b9b9c856691ef90d1a2983fe62ed84d3282473a92394e2ffc9f30b318c9a"
+        },
+        "session6": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session6.jsonl",
+          "sha256": "641bf672cab19da5f322a7a15ab3ac30db65cf7e4b2b9fcb16a19955cee194a6"
+        },
+        "session7": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session7.jsonl",
+          "sha256": "2a42a12ecaa952caa0d651a55d314f5cb05e88c94b614ed7e43a66297c4b1a95"
+        },
+        "session8": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session8.jsonl",
+          "sha256": "5b01b1329c4f8c2b7b856ece5975ff17d7e569941b6af0582a4ed33cf081adbc"
+        },
+        "session9": {
+          "file": "20261017-205617-32740/goose~rally-3d-shade~0.session9.jsonl",
+          "sha256": "c8ccc675df772bc184c438d5b20215f1b4b44d9e59a58630ccc7898fd9766c1b"
+        }
+      }
+    }
+  ]
+}

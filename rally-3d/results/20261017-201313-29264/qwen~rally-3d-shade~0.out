@@ -1,0 +1,10 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+
+
+All 4 tests pass. I've ported the headless Node implementation:
+
+**src/sun.js** — `sunPosition(date, lat, lng)` now computes elevation and bearing using the SunCalc algorithm. I also added `tzOffset`, `zonedTime`, and `localYmd` helpers from the TypeScript reference (unused by your tests, but preserved for completeness).
+
+**src/shade.js** — `shadeAt(scene, date)` traces a ray from every sample point toward the sun direction, stepping 0.5m at a time. It marks a sample shaded when the first obstacle on that ray exceeds `h0 + d * rise` where `h0 = court.z + 1` metres. Returns the fraction of samples shaded, or `null` when the sun is at/below the horizon.
+
+Tests confirm: midday sun is visible, flat venues are unshaded, fully obstructed venues return 1.0, and night returns null.

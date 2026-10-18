@@ -1,0 +1,498 @@
+diff --git a/.aider.chat.history.md b/.aider.chat.history.md
+new file mode 100644
+index 0000000..eba9627
+--- /dev/null
++++ b/.aider.chat.history.md
+@@ -0,0 +1,225 @@
++
++# aider chat started at 2026-10-17 21:09:45
++
++> Detected dumb terminal, disabling fancy input and pretty output.  
++> ~/.local/bin/aider --model openai/bench-model --yes-always --no-auto-commits --no-check-update --analytics-disable --no-show-model-warnings --no-pretty --no-stream --no-gitignore --message Rally's court pages have a 3D view that shows how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser. We want it headless on the server to precompute a shade forecast.
++
++Implement it in this Node package: `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). There is no browser code to copy — README.md writes up the physics and the scene format. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is. README.md package.json src/geometry.js src/shade.js src/sun.js venues/bellevue-crossroads-park.json venues/kenmore-inglemoor-hs.json venues/kirkland-peter-kirk-park.json  
++> Warning: it's best to only add files that need changes to the chat.  
++> https://aider.chat/docs/troubleshooting/edit-errors.html  
++> Aider v0.86.2  
++> Model: openai/bench-model with whole edit format  
++> Git repo: .git with 9 files  
++> Repo-map: using 1024 tokens, auto refresh  
++> Added README.md to the chat.  
++> Added package.json to the chat.  
++> Added src/geometry.js to the chat.  
++> Added src/shade.js to the chat.  
++> Added src/sun.js to the chat.  
++> Added venues/bellevue-crossroads-park.json to the chat.  
++> Added venues/kenmore-inglemoor-hs.json to the chat.  
++> Added venues/kirkland-peter-kirk-park.json to the chat.  
++
++#### Rally's court pages have a 3D view that shows how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser. We want it headless on the server to precompute a shade forecast.  
++####   
++#### Implement it in this Node package: `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). There is no browser code to copy — README.md writes up the physics and the scene format. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.  
++> test/shade.test.js  
++> Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]: y  
++
++I’ll implement `sunPosition` with the SunCalc formulas and `shadeAt` with a ray-marched shadow test over the court sample grid. Only `src/sun.js` and `src/shade.js` need to change.
++
++src/sun.js
++````
++// Sun position (the SunCalc formulas).
++
++const rad = Math.PI / 180;
++const dayMs = 86400000;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const e = rad * 23.4397;
++
++function toJulian(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970;
++}
++
++function toDays(date) {
++  return toJulian(date) - J2000;
++}
++
++function solarMeanAnomaly(d) {
++  return rad * (357.5291 + 0.98560028 * d);
++}
++
++function eclipticLongitude(M) {
++  const C =
++    rad *
++    (1.9148 * Math.sin(M) +
++      0.02 * Math.sin(2 * M) +
++      0.0003 * Math.sin(3 * M));
++  const P = rad * 102.9372;
++  return M + C + P + Math.PI;
++}
++
++function declination(L) {
++  return Math.asin(Math.sin(e) * Math.sin(L));
++}
++
++function rightAscension(L) {
++  return Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++}
++
++function siderealTime(d, lw) {
++  return rad * (280.16 + 360.9856235 * d) - lw;
++}
++
++function altitude(H, phi, dec) {
++  return Math.asin(
++    Math.sin(phi) * Math.sin(dec) +
++      Math.cos(phi) * Math.cos(dec) * Math.cos(H)
++  );
++}
++
++function azimuth(H, phi, dec) {
++  return Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)
++  );
++}
++
++export function sunPosition(date, lat, lng) {
++  const lw = -lng * rad;
++  const phi = lat * rad;
++  const d = toDays(date);
++  const M = solarMeanAnomaly(d);
++  const L = eclipticLongitude(M);
++  const dec = declination(L);
++  const ra = rightAscension(L);
++  const H = siderealTime(d, lw) - ra;
++
++  const alt = altitude(H, phi, dec);
++
++  // SunCalc's azimuth is measured from south; convert to compass bearing
++  // from north, clockwise.
++  let bearing = azimuth(H, phi, dec) + Math.PI;
++  bearing = (bearing + 2 * Math.PI) % (2 * Math.PI);
++
++  return { alt, bearing };
++}
++````
++
++src/shade.js
++````
++import { sunPosition } from './sun.js';
++import { fromFrame } from './geometry.js';
++
++const NONE = -32768;
++const SAMPLES_PER_METRE = 2;
++
++// March the sun ray through the obstacle grid with a DDA / voxel traversal.
++// `d` is distance in metres from the court sample point.
++function inShadow(scene, x, y, z, dx, dy, tanAlt) {
++  const { radius, cell, g, top } = scene;
++
++  const u = (x + radius) / cell;
++  const v = (radius - y) / cell;
++
++  let i = Math.floor(u);
++  let j = Math.floor(v);
++
++  if (i < 0 || j < 0 || i >= g || j >= g) return false;
++
++  // The cell containing the sample point is at effectively zero distance.
++  const startTop = top[j * g + i];
++  if (startTop !== NONE && startTop / 10 > z) return true;
++
++  const du = dx / cell;
++  const dv = -dy / cell;
++
++  let tMaxX = Infinity;
++  let tMaxY = Infinity;
++  let tDeltaX = Infinity;
++  let tDeltaY = Infinity;
++  let stepI = 0;
++  let stepJ = 0;
++
++  if (du > 0) {
++    tMaxX = (i + 1 - u) / du;
++    tDeltaX = 1 / du;
++    stepI = 1;
++  } else if (du < 0) {
++    tMaxX = (i - u) / du;
++    tDeltaX = -1 / du;
++    stepI = -1;
++  }
++
++  if (dv > 0) {
++    tMaxY = (j + 1 - v) / dv;
++    tDeltaY = 1 / dv;
++    stepJ = 1;
++  } else if (dv < 0) {
++    tMaxY = (j - v) / dv;
++    tDeltaY = -1 / dv;
++    stepJ = -1;
++  }
++
++  while (true) {
++    let d;
++
++    if (tMaxX < tMaxY) {
++      d = tMaxX;
++      i += stepI;
++      tMaxX += tDeltaX;
++    } else {
++      d = tMaxY;
++      j += stepJ;
++      tMaxY += tDeltaY;
++    }
++
++    if (!Number.isFinite(d)) return false;
++    if (i < 0 || j < 0 || i >= g || j >= g) return false;
++
++    const h = top[j * g + i];
++    if (h !== NONE && h / 10 > z + d * tanAlt) return true;
++  }
++}
++
++export function shadeAt(scene, date) {
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (alt <= 0) return null;
++
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++  const tanAlt = Math.tan(alt);
++
++  let total = 0;
++  let shaded = 0;
++
++  for (const court of scene.courts) {
++    const pl = court.pl;
++    const pw = court.pw;
++    const z = court.z ?? 0;
++
++    const nA = Math.max(1, Math.round(pl * SAMPLES_PER_METRE));
++    const nB = Math.max(1, Math.round(pw * SAMPLES_PER_METRE));
++
++    for (let ia = 0; ia < nA; ia++) {
++      const a = -pl / 2 + ((ia + 0.5) * pl) / nA;
++
++      for (let ib = 0; ib < nB; ib++) {
++        const b = -pw / 2 + ((ib + 0.5) * pw) / nB;
++        const [x, y] = fromFrame(court, a, b);
++
++        total++;
++        if (inShadow(scene, x, y, z, dx, dy, tanAlt)) shaded++;
++      }
++    }
++  }
++
++  return total === 0 ? 0 : shaded / total;
++}
++````
++
++> Tokens: 96k sent, 640 cache hit, 20k received.  
++> Applied edit to src/sun.js  
++> Applied edit to src/shade.js  
++> summarizer unexpectedly failed for all models  
+diff --git a/.aider.input.history b/.aider.input.history
+new file mode 100644
+index 0000000..2a9804f
+--- /dev/null
++++ b/.aider.input.history
+@@ -0,0 +1,5 @@
++
++# 2026-10-17 21:09:47.527618
+++Rally's court pages have a 3D view that shows how much of each venue's courts the trees and buildings shade as the sun moves; today it only runs in the browser. We want it headless on the server to precompute a shade forecast.
+++
+++Implement it in this Node package: `sunPosition` in src/sun.js and `shadeAt` in src/shade.js (src/geometry.js is given). There is no browser code to copy — README.md writes up the physics and the scene format. test/shade.test.js has a few cases; run `node --test`. Keep the visible test file as it is.
+diff --git a/.aider.tags.cache.v4/cache.db b/.aider.tags.cache.v4/cache.db
+new file mode 100644
+index 0000000000000000000000000000000000000000..0dd306b19cdbbe8caa340c4dcb363bc5abd8cb4d
+GIT binary patch
+literal 32768
+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
+Jh>fKJ{{aHg>8bz#
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..21dae03 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -1,9 +1,108 @@
+ import { sunPosition } from './sun.js';
+-import { fromFrame, cellOf } from './geometry.js';
++import { fromFrame } from './geometry.js';
+ 
+-// Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
++const NONE = -32768;
++const SAMPLES_PER_METRE = 2;
++
++// March the sun ray through the obstacle grid with a DDA / voxel traversal.
++// `d` is distance in metres from the court sample point.
++function inShadow(scene, x, y, z, dx, dy, tanAlt) {
++  const { radius, cell, g, top } = scene;
++
++  const u = (x + radius) / cell;
++  const v = (radius - y) / cell;
++
++  let i = Math.floor(u);
++  let j = Math.floor(v);
++
++  if (i < 0 || j < 0 || i >= g || j >= g) return false;
++
++  // The cell containing the sample point is at effectively zero distance.
++  const startTop = top[j * g + i];
++  if (startTop !== NONE && startTop / 10 > z) return true;
++
++  const du = dx / cell;
++  const dv = -dy / cell;
++
++  let tMaxX = Infinity;
++  let tMaxY = Infinity;
++  let tDeltaX = Infinity;
++  let tDeltaY = Infinity;
++  let stepI = 0;
++  let stepJ = 0;
++
++  if (du > 0) {
++    tMaxX = (i + 1 - u) / du;
++    tDeltaX = 1 / du;
++    stepI = 1;
++  } else if (du < 0) {
++    tMaxX = (i - u) / du;
++    tDeltaX = -1 / du;
++    stepI = -1;
++  }
++
++  if (dv > 0) {
++    tMaxY = (j + 1 - v) / dv;
++    tDeltaY = 1 / dv;
++    stepJ = 1;
++  } else if (dv < 0) {
++    tMaxY = (j - v) / dv;
++    tDeltaY = -1 / dv;
++    stepJ = -1;
++  }
++
++  while (true) {
++    let d;
++
++    if (tMaxX < tMaxY) {
++      d = tMaxX;
++      i += stepI;
++      tMaxX += tDeltaX;
++    } else {
++      d = tMaxY;
++      j += stepJ;
++      tMaxY += tDeltaY;
++    }
++
++    if (!Number.isFinite(d)) return false;
++    if (i < 0 || j < 0 || i >= g || j >= g) return false;
++
++    const h = top[j * g + i];
++    if (h !== NONE && h / 10 > z + d * tanAlt) return true;
++  }
++}
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (alt <= 0) return null;
++
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++  const tanAlt = Math.tan(alt);
++
++  let total = 0;
++  let shaded = 0;
++
++  for (const court of scene.courts) {
++    const pl = court.pl;
++    const pw = court.pw;
++    const z = court.z ?? 0;
++
++    const nA = Math.max(1, Math.round(pl * SAMPLES_PER_METRE));
++    const nB = Math.max(1, Math.round(pw * SAMPLES_PER_METRE));
++
++    for (let ia = 0; ia < nA; ia++) {
++      const a = -pl / 2 + ((ia + 0.5) * pl) / nA;
++
++      for (let ib = 0; ib < nB; ib++) {
++        const b = -pw / 2 + ((ib + 0.5) * pw) / nB;
++        const [x, y] = fromFrame(court, a, b);
++
++        total++;
++        if (inShadow(scene, x, y, z, dx, dy, tanAlt)) shaded++;
++      }
++    }
++  }
++
++  return total === 0 ? 0 : shaded / total;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..3ba6348 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,75 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position (the SunCalc formulas).
++
++const rad = Math.PI / 180;
++const dayMs = 86400000;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const e = rad * 23.4397;
++
++function toJulian(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970;
++}
++
++function toDays(date) {
++  return toJulian(date) - J2000;
++}
++
++function solarMeanAnomaly(d) {
++  return rad * (357.5291 + 0.98560028 * d);
++}
++
++function eclipticLongitude(M) {
++  const C =
++    rad *
++    (1.9148 * Math.sin(M) +
++      0.02 * Math.sin(2 * M) +
++      0.0003 * Math.sin(3 * M));
++  const P = rad * 102.9372;
++  return M + C + P + Math.PI;
++}
++
++function declination(L) {
++  return Math.asin(Math.sin(e) * Math.sin(L));
++}
++
++function rightAscension(L) {
++  return Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++}
++
++function siderealTime(d, lw) {
++  return rad * (280.16 + 360.9856235 * d) - lw;
++}
++
++function altitude(H, phi, dec) {
++  return Math.asin(
++    Math.sin(phi) * Math.sin(dec) +
++      Math.cos(phi) * Math.cos(dec) * Math.cos(H)
++  );
++}
++
++function azimuth(H, phi, dec) {
++  return Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi)
++  );
++}
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const lw = -lng * rad;
++  const phi = lat * rad;
++  const d = toDays(date);
++  const M = solarMeanAnomaly(d);
++  const L = eclipticLongitude(M);
++  const dec = declination(L);
++  const ra = rightAscension(L);
++  const H = siderealTime(d, lw) - ra;
++
++  const alt = altitude(H, phi, dec);
++
++  // SunCalc's azimuth is measured from south; convert to compass bearing
++  // from north, clockwise.
++  let bearing = azimuth(H, phi, dec) + Math.PI;
++  bearing = (bearing + 2 * Math.PI) % (2 * Math.PI);
++
++  return { alt, bearing };
+ }

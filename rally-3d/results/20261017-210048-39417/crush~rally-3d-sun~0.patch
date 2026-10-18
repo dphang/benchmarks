@@ -1,0 +1,158 @@
+diff --git a/src/shade.js b/src/shade.js
+index 3b46da6..073e8e2 100644
+--- a/src/shade.js
++++ b/src/shade.js
+@@ -1,9 +1,84 @@
+ import { sunPosition } from './sun.js';
+ import { fromFrame, cellOf } from './geometry.js';
+ 
+-// Share of court samples shaded by trees/buildings at `date`, or null when the
+-// sun is down. Not implemented yet.
++const NONE = -32768;
++
++function isShaded(scene, x, y, h0, dx, dy, slope) {
++  const { radius, cell, g, top } = scene;
++  const maxDist = 2 * radius;
++
++  const start = cellOf(scene, x, y);
++  if (start === -1) return false;
++  let i = start % g;
++  let j = (start - i) / g;
++
++  const stepI = dx > 0 ? 1 : dx < 0 ? -1 : 0;
++  const stepJ = dy < 0 ? 1 : dy > 0 ? -1 : 0;
++
++  let tMaxI = Infinity;
++  let tDeltaI = Infinity;
++  if (dx > 0) {
++    tMaxI = (-radius + (i + 1) * cell - x) / dx;
++    tDeltaI = cell / dx;
++  } else if (dx < 0) {
++    tMaxI = (-radius + i * cell - x) / dx;
++    tDeltaI = -cell / dx;
++  }
++
++  let tMaxJ = Infinity;
++  let tDeltaJ = Infinity;
++  if (dy > 0) {
++    tMaxJ = (radius - j * cell - y) / dy;
++    tDeltaJ = cell / dy;
++  } else if (dy < 0) {
++    tMaxJ = (radius - (j + 1) * cell - y) / dy;
++    tDeltaJ = -cell / dy;
++  }
++
++  let t = 0;
++  for (;;) {
++    const h = top[j * g + i];
++    if (h !== NONE && h / 10 > h0 + t * slope) return true;
++
++    if (tMaxI < tMaxJ) {
++      i += stepI;
++      t = tMaxI;
++      tMaxI += tDeltaI;
++    } else {
++      j += stepJ;
++      t = tMaxJ;
++      tMaxJ += tDeltaJ;
++    }
++
++    if (i < 0 || j < 0 || i >= g || j >= g || t > maxDist) return false;
++  }
++}
+ 
+ export function shadeAt(scene, date) {
+-  throw new Error('shadeAt is not implemented');
++  const { alt, bearing } = sunPosition(date, scene.lat, scene.lng);
++  if (alt <= 0) return null;
++
++  const dx = Math.sin(bearing);
++  const dy = Math.cos(bearing);
++  const slope = Math.tan(alt);
++
++  let shaded = 0;
++  let total = 0;
++
++  for (const court of scene.courts) {
++    const nA = Math.max(2, Math.ceil(court.pl));
++    const nB = Math.max(2, Math.ceil(court.pw));
++
++    for (let ia = 0; ia < nA; ia++) {
++      const a = -court.pl / 2 + ((ia + 0.5) * court.pl) / nA;
++      for (let ib = 0; ib < nB; ib++) {
++        const b = -court.pw / 2 + ((ib + 0.5) * court.pw) / nB;
++        const [x, y] = fromFrame(court, a, b);
++        total++;
++        if (isShaded(scene, x, y, court.z, dx, dy, slope)) shaded++;
++      }
++    }
++  }
++
++  return total === 0 ? 0 : shaded / total;
+ }
+diff --git a/src/sun.js b/src/sun.js
+index e2da50c..a1749da 100644
+--- a/src/sun.js
++++ b/src/sun.js
+@@ -1,5 +1,59 @@
+-// Sun position (the SunCalc formulas). Not implemented yet.
++// Sun position via the standard SunCalc formulas.
++
++const rad = Math.PI / 180;
++const dayMs = 1000 * 60 * 60 * 24;
++const J1970 = 2440588;
++const J2000 = 2451545;
++const e = rad * 23.4397;
++
++function toJulian(date) {
++  return date.valueOf() / dayMs - 0.5 + J1970;
++}
++
++function toDays(date) {
++  return toJulian(date) - J2000;
++}
++
++function solarMeanAnomaly(d) {
++  return rad * (357.5291 + 0.98560028 * d);
++}
++
++function eclipticLongitude(M) {
++  const C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
++  const P = rad * 102.9372;
++  return M + C + P + Math.PI;
++}
++
++function declination(L) {
++  return Math.asin(Math.sin(e) * Math.sin(L));
++}
++
++function rightAscension(L) {
++  return Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
++}
++
++function siderealTime(d, lw) {
++  return rad * (280.16 + 360.9856235 * d) - lw;
++}
+ 
+ export function sunPosition(date, lat, lng) {
+-  throw new Error('sunPosition is not implemented');
++  const lw = rad * -lng;
++  const phi = rad * lat;
++  const d = toDays(date);
++  const M = solarMeanAnomaly(d);
++  const L = eclipticLongitude(M);
++  const dec = declination(L);
++  const ra = rightAscension(L);
++  const H = siderealTime(d, lw) - ra;
++
++  const alt = Math.asin(
++    Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H),
++  );
++  const azimuth = Math.atan2(
++    Math.sin(H),
++    Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi),
++  );
++  const bearing = ((azimuth + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
++
++  return { alt, bearing };
+ }

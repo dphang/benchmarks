@@ -1,0 +1,16 @@
+Warning: running headless with --yolo / approval-mode=yolo and no sandbox. All tool calls (shell, write, edit) auto-execute at this process's privilege level. Configure tools.executionSandbox on Linux or a supported legacy sandbox via --sandbox / QWEN_SANDBOX, or set QWEN_CODE_SUPPRESS_YOLO_WARNING=1 to silence this notice.
+Implemented both modules.
+
+**`src/sun.js`** — `sunPosition(date, lat, lng)` using the standard SunCalc chain: Julian day → mean anomaly → equation of the centre → ecliptic longitude → declination/right ascension → hour angle → altitude and azimuth. Azimuth (south-origin, west-positive) is converted to a compass bearing clockwise from north in `[0, 2π)`.
+
+**`src/shade.js`** — `shadeAt(scene, date)`:
+- Returns `null` when `alt <= 0`.
+- Samples each court's `pl × pw` playing area on a 1 m grid via `fromFrame`, poolng all points across all courts (area-weighted).
+- For each sample at `(x, y, z)`, marches toward the sun (`dx = sin(bearing)`, `dy = cos(bearing)`, since world `+x` is east and `+y` north) in half-cell steps. An obstacle shades the point when `top[cell]/10 > z + dist * tan(alt)`; marching stops and the point counts as unshaded when `cellOf` returns `-1` (venue ends first).
+
+Verification:
+- `node --test`: **8/8 pass**, including the four provided cases.
+- Sanity-checked physics: Seattle June noon = 65.7° alt / bearing ~174°; December noon = 18.9°; real venues produce plausible day curves (all shade at low sun, little at midday where courts are open). A 12 m wall 8 m south shadows at December noon but not June noon, a north wall is ignored, a far wall is cleared by the rising ray, and a wall below court elevation never shades.
+- A full-day (96-slot) forecast runs in ~16–60 ms per venue.
+
+I left `test/shade.test.js` untouched and added the extra checks in `test/sun-shade.test.js`.

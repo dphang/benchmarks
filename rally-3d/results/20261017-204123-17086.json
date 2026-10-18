@@ -1,0 +1,336 @@
+{
+  "model": "bench-model",
+  "ctx": 32768,
+  "offline": false,
+  "meta": {
+    "started_at": "2026-10-17T20:41:24-0700",
+    "command": [
+      "run.py",
+      "--api",
+      "http://localhost:4001",
+      "--meter",
+      "http://localhost:4101",
+      "--meter-log",
+      "rally-3d/meter-weak.jsonl",
+      "--model",
+      "bench-model",
+      "--agents",
+      "opencode,claude,codex,goose,aider,qwen,crush",
+      "--timeout",
+      "600",
+      "--seed",
+      "11",
+      "--tasks",
+      "rally-3d-sun"
+    ],
+    "bench_commit": null,
+    "bench_dirty": true,
+    "agent_versions": {
+      "opencode": "PlatformError: Unknown: FileSystem.open (~/.local/share/opencode/log/opencode.log)",
+      "claude": "2.1.302 (Claude Code)",
+      "codex": "codex-cli 0.162.1",
+      "goose": "1.54.0",
+      "aider": "aider 0.86.2",
+      "qwen": "0.25.1",
+      "crush": "crush version v0.98.1"
+    },
+    "model_alias": "bench-model",
+    "upstream_model": "openrouter/qwen/qwen3.5-9b",
+    "proxy": "LiteLLM: Current Version = 1.105.0",
+    "platform": {
+      "system": "macOS-26.3-arm64-arm-64bit",
+      "machine": "arm64",
+      "cpus": 10,
+      "python": "3.12.5"
+    },
+    "offline_sandbox": false,
+    "timeout_s": 600,
+    "seed": 11,
+    "repeat": 1,
+    "tasks": {
+      "rally-3d-sun": "a0fe355d40ea5a294e96fdc1fe035084f81a76a318061130889ae4ff854de695"
+    }
+  },
+  "results": [
+    {
+      "agent": "claude",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 600.0,
+      "exit_code": -1,
+      "timed_out": true,
+      "check_output": " error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/claude/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/claude/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 47.62875\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 31,
+        "input": 3245462,
+        "output": 26020,
+        "cached": 0
+      },
+      "meter_label": "claude~rally-3d-sun~0~b1c539e4",
+      "started_at": "2026-10-17T20:41:28-0700",
+      "ended_at": "2026-10-17T20:51:30-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/claude~rally-3d-sun~0.out",
+          "sha256": "59ffc46bc514ac6019164b835ecb15108d6e20fa0709d3764f32ec6c9baa4e33"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/claude~rally-3d-sun~0.patch",
+          "sha256": "129b7796739319da9a741c3caab3b987f0650b59633c67b5535086cd46d550c1"
+        },
+        "check": {
+          "file": "20261017-204123-17086/claude~rally-3d-sun~0.check.txt",
+          "sha256": "9a85eaa4379cfb3f0326c168ba89f5b6b727ecb02e0d077ba2e1af14659a68be"
+        },
+        "session0": {
+          "file": "20261017-204123-17086/claude~rally-3d-sun~0.session0.jsonl",
+          "sha256": "7ac07d773241453645f85ac5006142f4b33163944ae255e3eeb66366f4acbda2"
+        },
+        "session1": {
+          "file": "20261017-204123-17086/claude~rally-3d-sun~0.session1.json",
+          "sha256": "c28e8308d97a433d22775c6ff633e79ff9de69d6d4fe9007465730d1e7779f4e"
+        }
+      }
+    },
+    {
+      "agent": "opencode",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 600.0,
+      "exit_code": -1,
+      "timed_out": true,
+      "check_output": "r: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/opencode/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/opencode/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 60.718958\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 128,
+        "input": 6949052,
+        "output": 53427,
+        "cached": 0
+      },
+      "meter_label": "opencode~rally-3d-sun~0~9f6123f0",
+      "started_at": "2026-10-17T20:51:30-0700",
+      "ended_at": "2026-10-17T21:01:32-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/opencode~rally-3d-sun~0.out",
+          "sha256": "49a9e696fcf2bf1f23782e516e22d69f00822b3f4ae5e0828919ef3b5c6e34cb"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/opencode~rally-3d-sun~0.patch",
+          "sha256": "76d29346b35d519cc54831ae66419fce5bae449a875c39bf94b80895fc8a390c"
+        },
+        "check": {
+          "file": "20261017-204123-17086/opencode~rally-3d-sun~0.check.txt",
+          "sha256": "baf2de72c157e88eacd60932aba9cfbc9427055308f9a2f1692fed582d897241"
+        }
+      }
+    },
+    {
+      "agent": "codex",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 6.9,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/codex/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/codex/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 54.419625\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": true,
+      "usage": {
+        "requests": 1,
+        "input": 8951,
+        "output": 317,
+        "cached": 0
+      },
+      "meter_label": "codex~rally-3d-sun~0~178c9f3d",
+      "started_at": "2026-10-17T21:01:32-0700",
+      "ended_at": "2026-10-17T21:01:40-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/codex~rally-3d-sun~0.out",
+          "sha256": "79900e2675947cc11faabe27e5e4c4a7977c38b56a0070107611752b137f80b8"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/codex~rally-3d-sun~0.patch",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "check": {
+          "file": "20261017-204123-17086/codex~rally-3d-sun~0.check.txt",
+          "sha256": "c139b39cfd25baa1afebd9e075c89d66feb018845baa8888511c86a8c5dcb426"
+        },
+        "session0": {
+          "file": "20261017-204123-17086/codex~rally-3d-sun~0.session0.jsonl",
+          "sha256": "b4a541612e273b37d4939c496c4139d4c5f25e556843d9c0831d2a607058eafd"
+        }
+      }
+    },
+    {
+      "agent": "qwen",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 62.6,
+      "exit_code": 1,
+      "timed_out": false,
+      "check_output": "'\n  error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/qwen/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/qwen/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 54.216917\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": false,
+      "usage": {
+        "requests": 7,
+        "input": 122740,
+        "output": 1557,
+        "cached": 81920
+      },
+      "meter_label": "qwen~rally-3d-sun~0~debb28ac",
+      "started_at": "2026-10-17T21:01:41-0700",
+      "ended_at": "2026-10-17T21:02:45-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/qwen~rally-3d-sun~0.out",
+          "sha256": "572e4a82323bcf5c7f1fbac3618f2d875810c62834989124510952184e5d01e3"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/qwen~rally-3d-sun~0.patch",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "check": {
+          "file": "20261017-204123-17086/qwen~rally-3d-sun~0.check.txt",
+          "sha256": "1c72e185598825d6638b9c0682c3657a5af59a167deeb98e4f7909fd7be0f06f"
+        },
+        "session0": {
+          "file": "20261017-204123-17086/qwen~rally-3d-sun~0.session0.jsonl",
+          "sha256": "617692733ce1178cf61b52abbf3459378689fd28482f826c013af253d95aba7c"
+        },
+        "session1": {
+          "file": "20261017-204123-17086/qwen~rally-3d-sun~0.session1.jsonl",
+          "sha256": "4a8ccaea772fa01d07b0b8c56faf5fd40493992e7566673303d70868c9f28dec"
+        }
+      }
+    },
+    {
+      "agent": "crush",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 9.9,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/crush/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/crush/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 54.221042\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": true,
+      "usage": {
+        "requests": 3,
+        "input": 15402,
+        "output": 379,
+        "cached": 0
+      },
+      "meter_label": "crush~rally-3d-sun~0~cd1ada0e",
+      "started_at": "2026-10-17T21:02:46-0700",
+      "ended_at": "2026-10-17T21:02:57-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/crush~rally-3d-sun~0.out",
+          "sha256": "4f0da2cdc90b4cfd6c8c09f72c0fdcb3eaf52d89a55215251ad91e475d6f535b"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/crush~rally-3d-sun~0.patch",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "check": {
+          "file": "20261017-204123-17086/crush~rally-3d-sun~0.check.txt",
+          "sha256": "427194f342ccc690b1d10ed96023cf73fcab6fd1fbf64b93840abd7b6fe31a72"
+        }
+      }
+    },
+    {
+      "agent": "aider",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 66.1,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/aider/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/aider/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 56.489125\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": true,
+      "usage": {
+        "requests": 1,
+        "input": 0,
+        "output": 0,
+        "cached": 0
+      },
+      "meter_label": "aider~rally-3d-sun~0~34363feb",
+      "started_at": "2026-10-17T21:02:58-0700",
+      "ended_at": "2026-10-17T21:04:05-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/aider~rally-3d-sun~0.out",
+          "sha256": "6ba798a2b23b3d492dcde97c4a7c35e421b8eb9072e61459a583adc5179ce15a"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/aider~rally-3d-sun~0.patch",
+          "sha256": "e901192b6c93dc14466cc96c0a046dc834a6d86d33068bf9069121bd36697ca1"
+        },
+        "check": {
+          "file": "20261017-204123-17086/aider~rally-3d-sun~0.check.txt",
+          "sha256": "7677c1b958efa8eba387c1db5b3a1c0b476e3fac4e5c1bfc115d0889b63b73e8"
+        }
+      }
+    },
+    {
+      "agent": "goose",
+      "task": "rally-3d-sun",
+      "rep": 0,
+      "passed": false,
+      "seconds": 11.8,
+      "exit_code": 0,
+      "timed_out": false,
+      "check_output": "  error: 'shadeAt is not implemented'\n  code: 'ERR_TEST_FAILURE'\n  stack: |-\n    shadeAt (file://work/weak/goose/rally-3d-sun-0/src/shade.js:8:9)\n    TestContext.<anonymous> (file://work/weak/goose/rally-3d-sun-0/test/shade.test.js:40:22)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 0\n# fail 4\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 56.716833\n",
+      "tokens": null,
+      "tampered": [],
+      "false_done": true,
+      "usage": {
+        "requests": 2,
+        "input": 7002,
+        "output": 1395,
+        "cached": 0
+      },
+      "meter_label": "goose~rally-3d-sun~0~0108552f",
+      "started_at": "2026-10-17T21:04:06-0700",
+      "ended_at": "2026-10-17T21:04:19-0700",
+      "evidence": {
+        "transcript": {
+          "file": "20261017-204123-17086/goose~rally-3d-sun~0.out",
+          "sha256": "81275307d7ea637420734799867f83da5410b154ef2bafc82e49c40e735e9ece"
+        },
+        "patch": {
+          "file": "20261017-204123-17086/goose~rally-3d-sun~0.patch",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "check": {
+          "file": "20261017-204123-17086/goose~rally-3d-sun~0.check.txt",
+          "sha256": "47e78303272f969f26c52452b147b9c490785f57ec3baae7474db0e2acb38e85"
+        },
+        "session0": {
+          "file": "20261017-204123-17086/goose~rally-3d-sun~0.session0.jsonl",
+          "sha256": "c1e509c3a541f55e48c27b783cd8cb6e3f64c84b03155773ad258cbc43910c03"
+        },
+        "session1": {
+          "file": "20261017-204123-17086/goose~rally-3d-sun~0.session1.jsonl",
+          "sha256": "1c25b7504eee45af27458c3fd7a77dbf1413852e83ae85298cff56bc57f8124c"
+        }
+      }
+    }
+  ]
+}
