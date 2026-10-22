@@ -3,3 +3,4 @@ rally-3d/__pycache__/
 rally-3d/meter-*.jsonl
 node_modules/
 .DS_Store
+agent-overhead/__pycache__/

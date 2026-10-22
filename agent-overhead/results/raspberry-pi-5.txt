@@ -1,0 +1,20 @@
+Raspberry Pi 5, 4 GB, aarch64, Debian 13 (trixie), kernel 6.12
+runner.py (per-proc /proc CPU sampling + ps RSS), 3 reps x 40 turns, 50 KB/turn
+RAM guard < 150 MB free (never tripped; board ended with more free RAM than it started)
+
+agent       CPU ms/turn    peak RSS MB    runtime    note
+-----------------------------------------------------------------
+crush             23.9            174      Go
+goose             28.8            209      Rust
+pi                34.6            169      Node
+kilo             576.1            892      Node       tree-sitter WASM; 3.3x worse CPU than on x86
+opencode             —              —      Bun        ARM channel shipped v1.19.4 (old); quit — not comparable
+aider                —              —      Python     will not install on the Pi's Python 3.13 (old numpy)
+
+Notes
+- Native (Rust/Go) agents hold their desktop numbers on ARM; the JS/VM agents degrade
+  more because their per-turn cost is V8/GC/JSON work that scales with the weaker
+  cores and much lower memory bandwidth (LPDDR4X ~17 GB/s vs ~100+ GB/s on the desktop).
+- pi is 2nd-fastest on the desktop but falls behind native Go/Rust here — the ranking
+  is not stable across hardware for interpreted runtimes.
+- kilo runs on 4 GB but at ~0.6 s/turn of pure agent overhead it feels sluggish.
