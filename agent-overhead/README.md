@@ -53,10 +53,13 @@ same tool-loop turn as the others.
 ### Raspberry Pi 5 (4 GB, aarch64) — 3 reps × 40 turns
 
 See [`results/raspberry-pi-5.txt`](results/raspberry-pi-5.txt). Headline: native
-(Rust/Go) agents hold their desktop numbers on the Pi; interpreted/VM agents (Node/
-Bun) degrade more, because their per-turn cost is engine work (JIT, GC, JSON) bound by
-CPU speed and memory bandwidth — both far weaker on a small board. kilo's tree-sitter
-WASM is 3.3× worse on ARM (~0.6 s/turn).
+(Rust/Go) agents stay lean on the Pi (crush 23.9, goose 28.8 ms/turn); the VM/
+interpreted agents degrade far more — pi 12→35, kilo 177→576 ms — because their
+per-turn cost is engine work (JIT, GC, JSON) bound by CPU speed and memory
+bandwidth, both far weaker on a small board. (Desktop CPU is measured with
+`/usr/bin/time -l` and the Pi with `/proc` sampling, so cross-platform CPU is
+approximate; the robust parts are the within-platform ranking and the size of the
+native-vs-VM gap.)
 
 ## What it shows
 
@@ -92,4 +95,6 @@ python3 runner.py stressmock.py goose crush pi kilo --reps 3 --turns 40 --blob-k
 `runner.py` samples the process tree every ~80 ms and kills an agent if free memory
 drops below `--min-free-mb` (default 150), so it is safe to run on a 4 GB board. The
 desktop numbers above were produced by an equivalent macOS runner using
-`/usr/bin/time -l`; `runner.py` reproduces the same methodology on Linux.
+`/usr/bin/time -l` (exact process-plus-children rusage); `runner.py` reads CPU from
+`/proc` (utime+stime) and RSS from `ps` instead, so its absolute CPU is close but not
+identical — compare within a platform, not across.
