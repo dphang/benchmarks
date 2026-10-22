@@ -84,17 +84,36 @@ everyone on a heavier task.
 
 ## Running it
 
-Needs `python3` and the agents installed (on `PATH` or at known paths; see the configs
-at the top of `runner.py`). The mock is model-free, so no API keys or credits are used.
+`runner.py` is self-contained and reproduces the whole table. It needs only
+`python3` plus whichever agents you want to measure, installed and on `PATH`. The
+mock is model-free, so **no API keys or credits are used**.
+
+Install the agents (each puts its binary on `PATH`):
 
 ```sh
-# Linux (CPU via /proc), one agent at a time, with a RAM guard for small devices:
-python3 runner.py stressmock.py goose crush pi kilo --reps 3 --turns 40 --blob-kb 50
+npm  i -g @antinomyhq/forge @earendil-works/pi-coding-agent @charmland/crush \
+          @anthropic-ai/claude-code @qwen-code/qwen-code @openai/codex \
+          cline @kilocode/cli
+brew install block-goose-cli                   # goose  (or the official install script)
+curl -fsSL https://opencode.ai/install | bash  # opencode
+pipx install aider-chat                        # aider
 ```
 
-`runner.py` samples the process tree every ~80 ms and kills an agent if free memory
-drops below `--min-free-mb` (default 150), so it is safe to run on a 4 GB board. The
-desktop numbers above were produced by an equivalent macOS runner using
-`/usr/bin/time -l` (exact process-plus-children rusage); `runner.py` reads CPU from
-`/proc` (utime+stime) and RSS from `ps` instead, so its absolute CPU is close but not
-identical — compare within a platform, not across.
+Then run the full set:
+
+```sh
+python3 runner.py stressmock.py \
+  forge pi crush claude goose qwen codex cline opencode aider kilo \
+  --reps 10 --turns 40 --blob-kb 50
+```
+
+- Works on **macOS** (CPU via `/usr/bin/time -l`) and **Linux** (CPU via `/proc`).
+  The two samplers are close but not identical, so compare within a platform, not
+  across. Memory (peak process-tree RSS) is sampled via `ps` on both.
+- Pass fewer names to measure a subset. If a binary is not on `PATH`, point to it
+  with `BENCH_<AGENT>_BIN`, e.g. `BENCH_FORGE_BIN=/opt/forge/forge`.
+- A **RAM guard** (`--min-free-mb`, default 150) kills an agent if free memory drops
+  too low, so it is safe on a 4 GB board; agents run one at a time.
+
+Versions drift, so re-pin and note them when you publish a run. These numbers are
+Oct 2026, latest-at-the-time versions.
